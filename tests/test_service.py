@@ -7,7 +7,12 @@ import fitz
 import pytest
 
 from requirements_review_agent.analysis import AnalysisBatch
-from requirements_review_agent.errors import ANALYSIS_INVALID, RULE_PACK_INVALID, ReviewException
+from requirements_review_agent.errors import (
+    ANALYSIS_INVALID,
+    RULE_PACK_INVALID,
+    ReviewError,
+    ReviewException,
+)
 from requirements_review_agent.models import (
     AnalysisSubmission,
     CheckResult,
@@ -20,6 +25,7 @@ from requirements_review_agent.models import (
 )
 from requirements_review_agent.providers.base import AnalysisProvider
 from requirements_review_agent.service import ReviewService
+from requirements_review_agent.storage import RunStore
 
 
 def build_pdf(path: Path) -> Path:
@@ -173,6 +179,32 @@ def test_new_service_instance_can_resume_status_batch_and_finalize(
     artifacts = resumed.finalize(prepared.run_id)
     assert artifacts.json.exists()
     assert resumed.status(prepared.run_id).stage == "finalized"
+
+
+def test_finalize_restores_recorded_failure_summaries(workspace: Path, pdf: Path) -> None:
+    service = ReviewService(workspace)
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+    batch = service.get_batch(prepared.run_id, 0)
+    service.submit(prepared.run_id, valid_submission_for(batch))
+    RunStore(workspace).record_failure(
+        prepared.run_id,
+        ReviewError(
+            code=ANALYSIS_INVALID,
+            message="一条需求需要人工确认。",
+            details={"requirement_id": batch.requirements[0].requirement_id},
+        ),
+    )
+
+    artifacts = ReviewService(workspace).finalize(prepared.run_id)
+    report = json.loads(artifacts.json.read_text(encoding="utf-8"))
+
+    assert report["failures"] == [
+        {
+            "code": ANALYSIS_INVALID,
+            "message": "一条需求需要人工确认。",
+            "details": {"requirement_id": batch.requirements[0].requirement_id},
+        }
+    ]
 
 
 def test_submit_validates_before_storage_and_keeps_prepared_stage_on_failure(

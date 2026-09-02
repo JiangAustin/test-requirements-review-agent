@@ -343,7 +343,26 @@ class ReviewService:
         payload = json.loads(failures_path.read_text(encoding="utf-8"))
         if not isinstance(payload, list):
             raise _analysis_invalid("failures 数据无效", run_id=run_id)
-        return tuple(ReviewError.model_validate(item) for item in payload)
+        failures: list[ReviewError] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                raise _analysis_invalid("failures 数据无效", run_id=run_id)
+            code = item.get("code")
+            message = item.get("message")
+            if not isinstance(code, str) or not isinstance(message, str):
+                raise _analysis_invalid("failures 数据无效", run_id=run_id)
+            failures.append(
+                ReviewError(
+                    code=code,
+                    message=message,
+                    details={
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"code", "message"}
+                    },
+                )
+            )
+        return tuple(failures)
 
     def _status_from_state(self, run_id: str, state: dict[str, Any]) -> RunStatus:
         artifacts_payload = state.get("artifacts")
