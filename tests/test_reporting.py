@@ -236,6 +236,32 @@ def test_markdown_contains_exact_nine_sections_and_stable_evidence_format(tmp_pa
     assert 'p.5 / （无章节）: “BLE reconnect timeout is 5 s.”' in markdown
 
 
+def test_markdown_escapes_dynamic_table_cells(tmp_path: Path) -> None:
+    report = build_review_report()
+    original = report.requirements[0]
+    special_source = source(7, "Mode A | Mode B\nremains available.", section="7.1")
+    updated_requirement = original.requirement.model_copy(
+        update={
+            "text": "支持 Mode A | Mode B。\n切换后状态保持。",
+            "sources": (special_source,),
+        }
+    )
+    updated_review = original.model_copy(update={"requirement": updated_requirement})
+    updated_report = report.model_copy(
+        update={"requirements": (updated_review, *report.requirements[1:])}
+    )
+    path = tmp_path / "review.md"
+
+    write_markdown(updated_report, path)
+
+    markdown = path.read_text(encoding="utf-8")
+    matrix_line = next(
+        line for line in markdown.splitlines() if line.startswith("| REQ-CONN-001 |")
+    )
+    assert "支持 Mode A \\| Mode B。<br>切换后状态保持。" in matrix_line
+    assert "Mode A \\| Mode B<br>remains available." in matrix_line
+
+
 def test_write_json_matches_model_dump_text_exactly(tmp_path: Path) -> None:
     report = build_review_report()
     path = tmp_path / "review.json"
@@ -291,6 +317,25 @@ def test_render_all_does_not_catch_unexpected_docx_error(
 
     with pytest.raises(RuntimeError, match="unexpected"):
         render_all(build_review_report(), tmp_path)
+
+
+def test_partial_rerender_removes_stale_docx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    complete = render_all(build_review_report(), tmp_path)
+    assert complete.docx is not None and complete.docx.exists()
+
+    def fail_docx(report: ReviewReport, path: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("requirements_review_agent.reporting.write_docx", fail_docx)
+
+    partial = render_all(build_review_report(), tmp_path)
+
+    assert partial.status == "partial"
+    assert partial.docx is None
+    assert not (tmp_path / "review.docx").exists()
 
 
 def test_markdown_write_preserves_existing_target_when_replace_fails(

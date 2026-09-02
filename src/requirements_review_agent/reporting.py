@@ -68,12 +68,15 @@ def write_markdown(report: ReviewReport, path: Path) -> None:
         automation_gap = _summarize_checks(requirement_review, Impact.AUTOMATION)
         evidence = _format_evidence_list(requirement_review.requirement.sources)
         lines.append(
-            "| "
-            f"{requirement_review.requirement.requirement_id} | "
-            f"{_compact(requirement_review.requirement.text)} | "
-            f"{_format_score(requirement_review.score.testability)} | "
-            f"{_format_score(requirement_review.score.scenario_coverage)} | "
-            f"{manual_gap} | {automation_gap} | {evidence} |"
+            _markdown_row(
+                requirement_review.requirement.requirement_id,
+                requirement_review.requirement.text,
+                _format_score(requirement_review.score.testability),
+                _format_score(requirement_review.score.scenario_coverage),
+                manual_gap,
+                automation_gap,
+                evidence,
+            )
         )
 
     lines.extend(["", "## 手动测试缺失信息"])
@@ -91,12 +94,13 @@ def write_markdown(report: ReviewReport, path: Path) -> None:
     for requirement_review in report.requirements:
         for scenario in requirement_review.analysis.scenarios:
             lines.append(
-                "| "
-                f"{requirement_review.requirement.requirement_id} | "
-                f"{scenario.category} | "
-                f"{_covered_label(scenario)} | "
-                f"{_compact(scenario.description)} | "
-                f"{_format_evidence_list(scenario.evidence)} |"
+                _markdown_row(
+                    requirement_review.requirement.requirement_id,
+                    scenario.category,
+                    _covered_label(scenario),
+                    scenario.description,
+                    _format_evidence_list(scenario.evidence),
+                )
             )
 
     lines.extend(["", "## 未完成项"])
@@ -107,12 +111,12 @@ def write_markdown(report: ReviewReport, path: Path) -> None:
             "## 运行元数据",
             "| 字段 | 值 |",
             "| --- | --- |",
-            f"| schema_version | {report.schema_version} |",
-            f"| run_id | {report.run_id or '无'} |",
-            f"| generated_at | {report.generated_at} |",
-            f"| provider_mode | {report.provider_mode.value} |",
-            f"| model_name | {report.model_name or '无'} |",
-            f"| rule_version | {report.rule_version} |",
+            _markdown_row("schema_version", report.schema_version),
+            _markdown_row("run_id", report.run_id or "无"),
+            _markdown_row("generated_at", report.generated_at),
+            _markdown_row("provider_mode", report.provider_mode.value),
+            _markdown_row("model_name", report.model_name or "无"),
+            _markdown_row("rule_version", report.rule_version),
         ]
     )
     _write_text_atomic(path, "\n".join(lines) + "\n")
@@ -231,6 +235,7 @@ def render_all(report: ReviewReport, output_dir: Path) -> ReportArtifacts:
     try:
         write_docx(report, docx_path)
     except (OSError, PackageNotFoundError) as error:
+        docx_path.unlink(missing_ok=True)
         updated_report = report.model_copy(
             update={
                 "failures": report.failures
@@ -365,8 +370,18 @@ def _format_evidence_list(evidence: tuple[SourceRef, ...]) -> str:
     return "；".join(_format_evidence(item) for item in evidence)
 
 
-def _compact(value: str) -> str:
-    return value.replace("\n", " ")
+def _markdown_cell(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", "<br>")
+        .replace("\r", "<br>")
+        .replace("\n", "<br>")
+    )
+
+
+def _markdown_row(*values: str) -> str:
+    return "| " + " | ".join(_markdown_cell(value) for value in values) + " |"
 
 
 def _summarize_checks(requirement_review: RequirementReview, impact: Impact) -> str:
