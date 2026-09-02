@@ -23,7 +23,7 @@ tools: ['read', 'requirements-review/*']
 
 执行约束：
 - 第 1 步必须要求用户提供 workspace-local PDF path、rule pack 与 model mode，只接受 copilot、company_api、local。
-- 第 2 步必须说明 provider name、data destination，以及是否会发生 external transfer；若不是 Copilot，只有在用户显式确认后才能继续。
+- 第 2 步必须说明 provider name、data destination，以及是否会发生 external transfer。company_api 模式只有在用户显式确认 external transfer 后才能继续；local 模式必须明确数据不离开本机。
 - 第 3 步若遇到 unsupported、scanned、encrypted、damaged 或 outside-workspace PDF，立即停止并报告错误码与本地路径，不给替代性虚构结果。
 - 第 4 步在 Copilot 模式必须覆盖 every batch：先读取 get_analysis_batch，再输出严格符合 AnalysisSubmission schema 的 JSON，然后提交 submit_analysis。所有 FACT findings 都必须绑定 batch source evidence；missing 和 needs_confirmation 必须给中文问题。
 - 第 5 步在 company_api 或 local 模式只调用 run_provider_analysis，不要手动伪造 provider 结果。

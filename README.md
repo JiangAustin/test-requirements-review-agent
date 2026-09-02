@@ -54,16 +54,31 @@ demo usage：
 4. 确认 provider 和 data destination。
 5. 执行 prepare_review。
 6. Copilot 模式逐批调用 get_analysis_batch 和 submit_analysis；company_api/local 模式调用 run_provider_analysis。
-7. 执行 finalize_review 与 get_review_status，并从 .runs/<run-id>/reports/ 打开 JSON、Markdown、DOCX。
+7. 执行 finalize_review 与 get_review_status，并从 `.runs/<run-id>/reports/` 打开 JSON、Markdown、DOCX。
 
 ## Provider 模式、环境变量与安全
 
 - copilot：数据发送到 GitHub Copilot model selected in VS Code。
 - company_api：数据发送到你显式配置的 company API；继续前必须做显式确认，明确 external transfer 和 data destination。
-- local：数据发送到本地推理服务；继续前仍需说明 data destination。
+- local：数据发送到本地推理服务；继续前仍需说明 data destination，local 模式的数据不离开本机。
 - 只使用这五个变量：RRA_COMPANY_BASE_URL、RRA_COMPANY_API_KEY、RRA_COMPANY_MODEL、RRA_LOCAL_BASE_URL、RRA_LOCAL_MODEL。
 - .env.example 只给变量名；真实 secrets never 写入 config、log、report、README、mcp.json 或 agent frontmatter。
-- 推荐把本地密钥放进 .env 或 VS Code 安全输入，不要提交到仓库。
+- 服务只读取当前进程的环境变量，不会自动加载 .env。`.env` 保持 ignored，但使用前必须由可信工具加载，或在启动 VS Code/MCP 的同一 PowerShell 会话中显式设置变量。
+
+company_api 模式可在当前 PowerShell 会话中设置：
+
+```powershell
+$env:RRA_COMPANY_BASE_URL = Read-Host "Company API base URL"
+$env:RRA_COMPANY_API_KEY = Read-Host "Company API key"
+$env:RRA_COMPANY_MODEL = Read-Host "Company model"
+```
+
+local 模式不使用 API key：
+
+```powershell
+$env:RRA_LOCAL_BASE_URL = Read-Host "Local API base URL"
+$env:RRA_LOCAL_MODEL = Read-Host "Local model"
+```
 
 ## 本地产物与忽略规则
 

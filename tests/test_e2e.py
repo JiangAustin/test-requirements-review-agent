@@ -188,6 +188,8 @@ def test_workspace_agent_and_portable_config_contracts_exist() -> None:
         last_index = current_index
     assert "需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率" in body
     assert "建议场景覆盖度不是现有用例覆盖率，也不是测试执行覆盖率" in body
+    assert "company_api" in body and "显式确认 external transfer" in body
+    assert "local" in body and "数据不离开本机" in body
     assert "review PDF" in body
     assert "manual" in body
     assert "automation" in body
@@ -357,6 +359,9 @@ def test_readme_defines_setup_security_and_metric_boundaries() -> None:
         "需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率",
         "显式确认",
         "secrets never",
+        "不会自动加载 .env",
+        '$env:RRA_COMPANY_API_KEY = Read-Host',
+        "local 模式的数据不离开本机",
     ]
     for fragment in required_fragments:
         assert fragment in readme
