@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from .analysis import AnalysisBatch, build_analysis_batch, validate_submission
 from .errors import (
     ANALYSIS_INVALID,
@@ -35,6 +37,7 @@ from .scoring import aggregate_scores, score_requirements
 from .storage import RunStore
 
 SCHEMA_VERSION = "1.0"
+_SERVICE_STAGES = {"prepared", "analyzed", "finalized", "partial", "failed"}
 
 
 def _analysis_invalid(message: str, **details: object) -> ReviewException:
@@ -266,15 +269,14 @@ class ReviewService:
         )
         reports_dir = self._store.run_path(run_id) / "reports"
         artifacts = render_all(report, reports_dir)
+        report_payload = json.loads(artifacts.json.read_text(encoding="utf-8"))
+        self._store.write_stage(run_id, "report", report_payload)
         if artifacts.status == "partial":
             state["stage"] = "partial"
         else:
             state["stage"] = "finalized"
         state["artifacts"] = artifacts.model_dump(mode="json", by_alias=True)
         self._store.write_stage(run_id, "service", state)
-
-        report_payload = json.loads(artifacts.json.read_text(encoding="utf-8"))
-        self._store.write_stage(run_id, "report", report_payload)
         return artifacts
 
     def status(self, run_id: str) -> RunStatus:
@@ -288,6 +290,8 @@ class ReviewService:
         candidate = Path(rule_pack)
         if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
             raise _rule_pack_invalid("规则包路径非法", rule_pack=rule_pack)
+        if candidate.suffix not in {"", ".yaml"}:
+            raise _rule_pack_invalid("规则包路径非法", rule_pack=rule_pack)
         filename = candidate.name if candidate.suffix == ".yaml" else f"{candidate.name}.yaml"
         if filename != candidate.name and len(candidate.parts) != 1:
             raise _rule_pack_invalid("规则包路径非法", rule_pack=rule_pack)
@@ -300,47 +304,61 @@ class ReviewService:
 
     def _load_state(self, run_id: str) -> dict[str, Any]:
         try:
-            return self._store.read_stage(run_id, "service")
-        except (FileNotFoundError, OSError, ValueError) as exc:
+            state = self._store.read_stage(run_id, "service")
+            stage = state.get("stage")
+            provider_mode = state.get("provider_mode")
+            if stage not in _SERVICE_STAGES or not isinstance(provider_mode, str):
+                raise ValueError("invalid service state")
+            ProviderMode(provider_mode)
+            return state
+        except (FileNotFoundError, OSError, ValueError, KeyError, TypeError) as exc:
             raise _analysis_invalid("运行状态不存在或已损坏", run_id=run_id) from exc
 
     def _load_requirements(self, run_id: str) -> tuple[AtomicRequirement, ...]:
-        payload = self._store.read_stage(run_id, "requirements")
-        items = payload.get("requirements", [])
-        if not isinstance(items, list):
-            raise _analysis_invalid("requirements 阶段数据无效", run_id=run_id)
-        return tuple(AtomicRequirement.model_validate(item) for item in items)
+        try:
+            payload = self._store.read_stage(run_id, "requirements")
+            items = payload.get("requirements", [])
+            if not isinstance(items, list):
+                raise ValueError("invalid requirements")
+            return tuple(AtomicRequirement.model_validate(item) for item in items)
+        except (OSError, ValueError, TypeError, ValidationError) as exc:
+            raise _analysis_invalid("requirements 阶段数据无效", run_id=run_id) from exc
 
     def _load_applicable(self, run_id: str) -> dict[str, tuple[ApplicableRule, ...]]:
-        payload = self._store.read_stage(run_id, "applicable")
-        mapping = payload.get("applicable", {})
-        if not isinstance(mapping, dict):
-            raise _analysis_invalid("applicable 阶段数据无效", run_id=run_id)
-        applicable: dict[str, tuple[ApplicableRule, ...]] = {}
-        for requirement_id, rules in mapping.items():
-            if not isinstance(requirement_id, str) or not isinstance(rules, list):
-                raise _analysis_invalid("applicable 阶段数据无效", run_id=run_id)
-            applicable[requirement_id] = tuple(
-                ApplicableRule.model_validate(rule) for rule in rules
-            )
-        return applicable
+        try:
+            payload = self._store.read_stage(run_id, "applicable")
+            mapping = payload.get("applicable", {})
+            if not isinstance(mapping, dict):
+                raise ValueError("invalid applicable rules")
+            applicable: dict[str, tuple[ApplicableRule, ...]] = {}
+            for requirement_id, rules in mapping.items():
+                if not isinstance(requirement_id, str) or not isinstance(rules, list):
+                    raise ValueError("invalid applicable rules")
+                applicable[requirement_id] = tuple(
+                    ApplicableRule.model_validate(rule) for rule in rules
+                )
+            return applicable
+        except (OSError, ValueError, TypeError, ValidationError) as exc:
+            raise _analysis_invalid("applicable 阶段数据无效", run_id=run_id) from exc
 
     def _load_submission(self, run_id: str) -> AnalysisSubmission:
         try:
             payload = self._store.read_stage(run_id, "submission")
-        except (FileNotFoundError, OSError, ValueError) as exc:
+            return AnalysisSubmission.model_validate(payload)
+        except (FileNotFoundError, OSError, ValueError, TypeError, ValidationError) as exc:
             raise _analysis_invalid(
-                "缺少已提交的分析结果",
+                "分析结果不存在或已损坏",
                 run_id=run_id,
-                stage="prepared",
             ) from exc
-        return AnalysisSubmission.model_validate(payload)
 
     def _load_failures(self, run_id: str) -> tuple[ReviewError, ...]:
         failures_path = self._store.run_path(run_id) / "failures.json"
         if not failures_path.exists():
             return ()
-        payload = json.loads(failures_path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(failures_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise _analysis_invalid("failures 数据无效", run_id=run_id) from exc
         if not isinstance(payload, list):
             raise _analysis_invalid("failures 数据无效", run_id=run_id)
         failures: list[ReviewError] = []

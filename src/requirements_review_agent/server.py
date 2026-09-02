@@ -33,8 +33,8 @@ def get_analysis_batch(run_id: str, batch_index: int) -> dict[str, object]:
 
 
 @mcp.tool(name="submit_analysis", structured_output=True)
-def submit_analysis(run_id: str, submission: dict[str, object]) -> dict[str, object]:
-    status = get_service().submit(run_id, AnalysisSubmission.model_validate(submission))
+def submit_analysis(run_id: str, submission: AnalysisSubmission) -> dict[str, object]:
+    status = get_service().submit(run_id, submission)
     return status.model_dump(mode="json")
 
 

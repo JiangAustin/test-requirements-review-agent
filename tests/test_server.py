@@ -172,6 +172,16 @@ async def test_server_tools_have_nonempty_schemas_and_forward_structured_results
     assert [call[0] for call in stub.calls] == ["prepare", "status", "submit", "run_provider"]
 
 
+@pytest.mark.asyncio
+async def test_submit_tool_exposes_exact_analysis_submission_schema() -> None:
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    submission_schema = tools["submit_analysis"].input_schema["properties"]["submission"]
+    assert submission_schema["$ref"].endswith("/$defs/AnalysisSubmission")
+    assert "AnalysisSubmission" in tools["submit_analysis"].input_schema["$defs"]
+
+
 def test_main_uses_stderr_logging_and_stdio_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 

@@ -207,6 +207,43 @@ def test_finalize_restores_recorded_failure_summaries(workspace: Path, pdf: Path
     ]
 
 
+def test_corrupt_submission_returns_stable_review_error(workspace: Path, pdf: Path) -> None:
+    service = ReviewService(workspace)
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+    batch = service.get_batch(prepared.run_id, 0)
+    service.submit(prepared.run_id, valid_submission_for(batch))
+    RunStore(workspace).write_stage(prepared.run_id, "submission", {"requirements": "secret"})
+
+    with pytest.raises(ReviewException, match=ANALYSIS_INVALID) as exc_info:
+        ReviewService(workspace).finalize(prepared.run_id)
+
+    assert "secret" not in str(exc_info.value)
+
+
+def test_finalize_keeps_analyzed_stage_when_report_stage_write_fails(
+    workspace: Path,
+    pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ReviewService(workspace)
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+    batch = service.get_batch(prepared.run_id, 0)
+    service.submit(prepared.run_id, valid_submission_for(batch))
+    original_write_stage = service._store.write_stage
+
+    def fail_report_stage(run_id: str, stage_name: str, payload: dict[str, object]) -> None:
+        if stage_name == "report":
+            raise OSError("disk full")
+        original_write_stage(run_id, stage_name, payload)
+
+    monkeypatch.setattr(service._store, "write_stage", fail_report_stage)
+
+    with pytest.raises(OSError, match="disk full"):
+        service.finalize(prepared.run_id)
+
+    assert ReviewService(workspace).status(prepared.run_id).stage == "analyzed"
+
+
 def test_submit_validates_before_storage_and_keeps_prepared_stage_on_failure(
     service: ReviewService, pdf: Path
 ) -> None:
@@ -295,3 +332,15 @@ def test_rule_pack_traversal_is_rejected(service: ReviewService, pdf: Path) -> N
 
     with pytest.raises(ReviewException, match=RULE_PACK_INVALID):
         service.prepare(pdf, "C:/temp/home-iot-v1.yaml", ProviderMode.COPILOT)
+
+
+def test_rule_pack_with_non_yaml_suffix_is_rejected(
+    service: ReviewService, workspace: Path, pdf: Path
+) -> None:
+    (workspace / "rules" / "home-iot-v1.txt.yaml").write_text(
+        (workspace / "rules" / "home-iot-v1.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ReviewException, match=RULE_PACK_INVALID):
+        service.prepare(pdf, "home-iot-v1.txt", ProviderMode.COPILOT)
