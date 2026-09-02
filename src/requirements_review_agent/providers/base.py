@@ -62,7 +62,7 @@ def _validate_config(mode: ProviderMode, env: Mapping[str, str]) -> tuple[str, s
                 "Provider configuration is unavailable.",
                 failure_type="config",
             )
-        return base_url, model, _required(env, "RRA_LOCAL_API_KEY")
+        return base_url, model, None
 
     raise provider_unavailable(
         "Provider mode is unsupported.",

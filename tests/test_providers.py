@@ -126,6 +126,30 @@ def test_local_mode_requires_non_empty_base_url_and_model() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_local_mode_ignores_unconfigured_api_key_variable() -> None:
+    authorization: str | None = "not-called"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal authorization
+        authorization = request.headers.get("authorization")
+        return httpx.Response(200, json=openai_response(valid_submission_json()))
+
+    configured = build_provider(
+        ProviderMode.LOCAL,
+        {
+            "RRA_LOCAL_BASE_URL": "http://localhost:11434",
+            "RRA_LOCAL_MODEL": "local-model",
+            "RRA_LOCAL_API_KEY": "not-a-supported-setting",
+        },
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert isinstance(configured, OpenAICompatibleProvider)
+    await configured.analyze(batch())
+    assert authorization is None
+
+
 def test_company_mode_requires_api_key() -> None:
     with pytest.raises(ReviewException, match=PROVIDER_UNAVAILABLE):
         build_provider(
