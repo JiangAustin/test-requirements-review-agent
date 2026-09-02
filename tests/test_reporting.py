@@ -90,7 +90,7 @@ def build_review_report() -> ReviewReport:
         ),
         score=RequirementScore(
             requirement_id="REQ-CONN-001",
-            testability=50.0,
+            testability=33.33,
             scenario_coverage=50.0,
         ),
     )
@@ -141,7 +141,7 @@ def build_review_report() -> ReviewReport:
         model_name="gpt-5.4",
         rule_version="home-iot-v1",
         requirements=(requirement_one, requirement_two),
-        aggregate=AggregateScore(testability=25.0, scenario_coverage=75.0),
+        aggregate=AggregateScore(testability=16.67, scenario_coverage=75.0),
         failures=(
             ReviewError(
                 code="ANALYSIS_INVALID",
@@ -187,7 +187,7 @@ def test_render_all_produces_complete_json_markdown_and_docx(tmp_path: Path) -> 
         assert requirement_id in markdown
         assert requirement_id in document_text
 
-    for score_text in ("50.0", "100.0", "75.0"):
+    for score_text in ("33.33", "16.67", "100.0", "75.0"):
         assert score_text in json_text
         assert score_text in markdown
         assert score_text in document_text

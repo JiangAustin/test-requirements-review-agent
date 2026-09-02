@@ -348,7 +348,7 @@ def _render_failure_lines(report: ReviewReport) -> list[str]:
 
 
 def _format_score(value: float) -> str:
-    return f"{value:.1f}"
+    return str(value)
 
 
 def _covered_label(scenario: ScenarioResult) -> str:
