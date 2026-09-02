@@ -1,1 +1,265 @@
-{}
+{
+  "$defs": {
+    "CheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "finding_type": {
+          "$ref": "#/$defs/FindingType"
+        },
+        "impact": {
+          "$ref": "#/$defs/Impact"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        }
+      },
+      "required": [
+        "rule_id",
+        "status",
+        "impact",
+        "severity",
+        "finding_type",
+        "evidence",
+        "confidence"
+      ],
+      "title": "CheckResult",
+      "type": "object"
+    },
+    "CheckStatus": {
+      "enum": [
+        "complete",
+        "missing",
+        "not_applicable",
+        "needs_confirmation"
+      ],
+      "title": "CheckStatus",
+      "type": "string"
+    },
+    "FindingType": {
+      "enum": [
+        "fact",
+        "suggestion"
+      ],
+      "title": "FindingType",
+      "type": "string"
+    },
+    "Impact": {
+      "enum": [
+        "manual",
+        "automation",
+        "both"
+      ],
+      "title": "Impact",
+      "type": "string"
+    },
+    "RequirementAnalysis": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "requirement_id": {
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "scenarios": {
+          "items": {
+            "$ref": "#/$defs/ScenarioResult"
+          },
+          "title": "Scenarios",
+          "type": "array"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "checks",
+        "scenarios"
+      ],
+      "title": "RequirementAnalysis",
+      "type": "object"
+    },
+    "ScenarioResult": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "covered": {
+          "title": "Covered",
+          "type": "boolean"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "description",
+        "covered",
+        "evidence"
+      ],
+      "title": "ScenarioResult",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "blocking",
+        "important",
+        "normal"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "SourceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "quote": {
+          "minLength": 1,
+          "title": "Quote",
+          "type": "string"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section"
+        },
+        "table_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Index"
+        }
+      },
+      "required": [
+        "page",
+        "quote"
+      ],
+      "title": "SourceRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "requirements": {
+      "items": {
+        "$ref": "#/$defs/RequirementAnalysis"
+      },
+      "title": "Requirements",
+      "type": "array"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "requirements"
+  ],
+  "title": "AnalysisSubmission",
+  "type": "object"
+}

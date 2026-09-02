@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict
+from pydantic import BaseModel, ConfigDict
 
 
-@dataclass(frozen=True)
-class ReviewError:
+class ReviewError(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     code: str
     message: str
-    details: Dict[str, Any]
+    details: dict[str, object]
 
 
 class ReviewException(Exception):
@@ -20,7 +20,6 @@ class ReviewException(Exception):
         return f"{self.error.code}: {self.error.message}"
 
 
-# Standardized exception codes
 PDF_ENCRYPTED = "PDF_ENCRYPTED"
 PDF_DAMAGED = "PDF_DAMAGED"
 PDF_SCANNED = "PDF_SCANNED"

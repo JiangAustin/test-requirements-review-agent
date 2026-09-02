@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, constr
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .errors import ReviewError
 
 
 class CheckStatus(StrEnum):
@@ -40,32 +43,36 @@ class SourceRef(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     page: int = Field(..., ge=1)
-    section: Optional[str] = None
-    table_index: Optional[int] = Field(default=None, ge=0)
-    bbox: Optional[Tuple[float, float, float, float]] = None
-    quote: constr(min_length=1)
+    quote: str = Field(..., min_length=1)
+    section: str | None = None
+    table_index: int | None = Field(default=None, ge=0)
+    bbox: tuple[float, float, float, float] | None = None
 
 
 class ExtractedTable(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    rows: List[List[str]]
-    coords: List[Tuple[float, float, float, float]]
+    page: int = Field(..., ge=1)
+    table_index: int = Field(..., ge=0)
+    bbox: tuple[float, float, float, float]
+    cells: tuple[tuple[str | None, ...], ...]
+    needs_manual_review: bool
 
 
 class ExtractedPage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    page_number: int
-    text_blocks: List[str]
-    tables: List[ExtractedTable]
+    page: int = Field(..., ge=1)
+    text: str
+    blocks: tuple[SourceRef, ...]
+    tables: tuple[ExtractedTable, ...]
 
 
 class ExtractedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     sha256: str
-    pages: List[ExtractedPage]
+    pages: tuple[ExtractedPage, ...]
 
 
 class AtomicRequirement(BaseModel):
@@ -73,8 +80,32 @@ class AtomicRequirement(BaseModel):
 
     requirement_id: str
     text: str
-    source: Tuple[SourceRef, ...]
+    sources: tuple[SourceRef, ...]
     needs_manual_review: bool = False
+
+
+class RuleCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule_id: str
+    question: str
+    weight: int = Field(..., gt=0)
+    impact: Impact
+    scenario_category: str | None
+    always: bool
+    keywords: tuple[str, ...]
+
+
+class ApplicableRule(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule_id: str
+    question: str
+    weight: int = Field(..., gt=0)
+    impact: Impact
+    scenario_category: str | None
+    always: bool
+    keywords: tuple[str, ...]
 
 
 class CheckResult(BaseModel):
@@ -85,74 +116,105 @@ class CheckResult(BaseModel):
     impact: Impact
     severity: Severity
     finding_type: FindingType
-    evidence: List[Dict]
-    rationale: Optional[str] = None
-    question: Optional[str] = None
+    evidence: tuple[SourceRef, ...]
+    rationale: str | None = None
+    question: str | None = None
+    confidence: float = Field(..., ge=0, le=1)
+
+    @model_validator(mode="after")
+    def require_fact_evidence(self) -> Self:
+        if self.finding_type is FindingType.FACT and not self.evidence:
+            raise ValueError("fact findings must include evidence")
+        return self
 
 
 class ScenarioResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    scenario_id: str
+    category: str
     description: str
-    evidence: List[Dict]
+    covered: bool
+    evidence: tuple[SourceRef, ...]
+
+    @model_validator(mode="after")
+    def require_covered_evidence(self) -> Self:
+        if self.covered and not self.evidence:
+            raise ValueError("covered scenarios must include evidence")
+        return self
 
 
 class RequirementAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    requirement: AtomicRequirement
-    checks: Tuple[CheckResult, ...]
-    scenarios: Tuple[ScenarioResult, ...]
+    requirement_id: str
+    checks: tuple[CheckResult, ...]
+    scenarios: tuple[ScenarioResult, ...]
+
+
+class AnalysisSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str
+    requirements: tuple[RequirementAnalysis, ...]
 
 
 class RequirementScore(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     requirement_id: str
-    score: int
-
-
-class RequirementReview(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    analysis: RequirementAnalysis
-    score: RequirementScore
+    testability: float = Field(..., ge=0, le=100)
+    scenario_coverage: float = Field(..., ge=0, le=100)
 
 
 class AggregateScore(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    total: int
-    breakdown: Dict[str, int]
+    testability: float = Field(..., ge=0, le=100)
+    scenario_coverage: float = Field(..., ge=0, le=100)
 
 
-class ReviewReport(BaseModel):
+class RequirementReview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    requirement: AtomicRequirement
+    analysis: RequirementAnalysis
+    score: RequirementScore
+
+
+class RunManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: str
+    pdf_hash: str
+    rule_version: str
+    model_mode: ProviderMode
     schema_version: str
-    run_id: Optional[str]
-    reviews: Tuple[RequirementReview, ...]
-    aggregate: AggregateScore
-    failures: List[Dict]
+    stage: str
+    created_at: str
 
 
 class ReportArtifacts(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
-    json_path: str
-    markdown_path: str
-    docx_path: Optional[str] = None
-    status: str
+    json_path: Path = Field(alias="json")
+    markdown: Path
+    docx: Path | None
+    status: Literal["complete", "partial"]
+
+    @property
+    def json(self) -> Path:  # type: ignore[override]
+        return self.json_path
 
 
 class PreparedReview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str
-    total_requirements: int
-    warnings: List[str]
-    artifacts: ReportArtifacts
+    provider_mode: ProviderMode
+    data_destination: str
+    requirement_count: int
+    warnings: tuple[str, ...]
+    batch_count: int
 
 
 class RunStatus(BaseModel):
@@ -160,23 +222,21 @@ class RunStatus(BaseModel):
 
     run_id: str
     stage: str
-    completed: bool
+    requirement_count: int
+    analyzed_count: int
+    warnings: tuple[str, ...]
+    artifacts: ReportArtifacts | None
 
 
-class ReviewError(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    code: str
-    message: str
-    details: Dict[str, object]
-
-
-class AnalysisSubmission(BaseModel):
+class ReviewReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: str
-    requirements: Tuple[RequirementAnalysis, ...]
-
-
-def generate_schema() -> str:
-    return AnalysisSubmission.model_json_schema(sort_keys=True)
+    run_id: str | None
+    generated_at: str
+    provider_mode: ProviderMode
+    model_name: str | None
+    rule_version: str
+    requirements: tuple[RequirementReview, ...]
+    aggregate: AggregateScore
+    failures: tuple[ReviewError, ...]
