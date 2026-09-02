@@ -14,6 +14,7 @@ from .models import (
     AtomicRequirement,
     CheckStatus,
     RequirementAnalysis,
+    SourceRef,
 )
 
 QUESTION_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -52,6 +53,15 @@ def _schema_snapshot() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(schema_json))
 
 
+def _source_ref_identity_key(source: SourceRef) -> tuple[object, object, object, object]:
+    return (
+        source.page,
+        source.section,
+        source.table_index,
+        source.quote,
+    )
+
+
 def _ordered_applicable(
     requirements: tuple[AtomicRequirement, ...],
     applicable: Mapping[str, tuple[ApplicableRule, ...]],
@@ -73,7 +83,16 @@ def _ordered_applicable(
         )
 
     for requirement in requirements:
-        ordered[requirement.requirement_id] = tuple(applicable[requirement.requirement_id])
+        rules = tuple(applicable[requirement.requirement_id])
+        rule_ids = [rule.rule_id for rule in rules]
+        if len(set(rule_ids)) != len(rule_ids):
+            duplicates = sorted({rule_id for rule_id in rule_ids if rule_ids.count(rule_id) > 1})
+            raise _rule_pack_invalid(
+                "需求的适用规则存在重复 rule_id",
+                requirement_id=requirement.requirement_id,
+                duplicates=duplicates,
+            )
+        ordered[requirement.requirement_id] = rules
     return ordered
 
 
@@ -149,10 +168,10 @@ def _validate_evidence_membership(
     analysis: RequirementAnalysis,
     requirement: AtomicRequirement,
 ) -> None:
-    valid_sources = set(requirement.sources)
+    valid_source_keys = {_source_ref_identity_key(source) for source in requirement.sources}
     for item in analysis.checks:
         for evidence in item.evidence:
-            if evidence not in valid_sources:
+            if _source_ref_identity_key(evidence) not in valid_source_keys:
                 raise _analysis_invalid(
                     "结论引用了未知原文证据",
                     requirement_id=analysis.requirement_id,
@@ -160,7 +179,7 @@ def _validate_evidence_membership(
                 )
     for scenario in analysis.scenarios:
         for evidence in scenario.evidence:
-            if evidence not in valid_sources:
+            if _source_ref_identity_key(evidence) not in valid_source_keys:
                 raise _analysis_invalid(
                     "场景引用了未知原文证据",
                     requirement_id=analysis.requirement_id,

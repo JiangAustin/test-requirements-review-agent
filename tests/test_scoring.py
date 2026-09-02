@@ -34,8 +34,15 @@ def source(
     *,
     section: str | None = None,
     table_index: int | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
 ) -> SourceRef:
-    return SourceRef(page=page, quote=quote, section=section, table_index=table_index)
+    return SourceRef(
+        page=page,
+        quote=quote,
+        section=section,
+        table_index=table_index,
+        bbox=bbox,
+    )
 
 
 def requirement(
@@ -244,6 +251,59 @@ def test_validate_submission_rejects_unknown_evidence() -> None:
         validate_submission(submission(analysis), (req,), {req.requirement_id: applicable})
 
 
+def test_validate_submission_accepts_evidence_matching_source_identity() -> None:
+    req = requirement(
+        "REQ-1",
+        sources=(
+            source(
+                2,
+                "Recovered quote",
+                section="2.0 Recovery",
+                table_index=0,
+                bbox=(10.0, 20.0, 30.0, 40.0),
+            ),
+        ),
+    )
+    applicable = (rule("timeout.retry", scenario_category="recovery"),)
+    analysis = analyzed(
+        req.requirement_id,
+        checks=(
+            check(
+                "timeout.retry",
+                CheckStatus.COMPLETE,
+                evidence=(
+                    source(
+                        2,
+                        "Recovered quote",
+                        section="2.0 Recovery",
+                        table_index=0,
+                    ),
+                ),
+                finding_type=FindingType.FACT,
+            ),
+        ),
+        scenarios=(
+            scenario(
+                "recovery",
+                covered=True,
+                evidence=(
+                    source(
+                        2,
+                        "Recovered quote",
+                        section="2.0 Recovery",
+                        table_index=0,
+                        bbox=(11.0, 21.0, 31.0, 41.0),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    analyses = validate_submission(submission(analysis), (req,), {req.requirement_id: applicable})
+
+    assert analyses == (analysis,)
+
+
 def test_validate_submission_maps_fact_validator_failure_to_analysis_invalid() -> None:
     req = requirement("REQ-1")
     applicable = (rule("acceptance.criteria"),)
@@ -388,6 +448,71 @@ def test_score_uses_only_applicable_weights() -> None:
     score = score_requirements((analysis,), applicable)[0]
 
     assert score.testability == pytest.approx(66.67)
+
+
+def test_build_analysis_batch_rejects_duplicate_applicable_rule_ids() -> None:
+    req = requirement("REQ-1")
+
+    with pytest.raises(ReviewException, match=RULE_PACK_INVALID):
+        build_analysis_batch(
+            run_id="run-dup-rules",
+            batch_index=0,
+            requirements=(req,),
+            applicable={
+                req.requirement_id: (
+                    rule("timeout.retry", scenario_category="recovery"),
+                    rule("timeout.retry", scenario_category="recovery"),
+                )
+            },
+        )
+
+
+def test_score_rejects_duplicate_applicable_rule_ids() -> None:
+    req_id = "REQ-1"
+    applicable = rules_by_requirement(
+        **{
+            req_id: (
+                rule("timeout.retry", scenario_category="recovery"),
+                rule("timeout.retry", scenario_category="recovery"),
+            )
+        }
+    )
+    analysis = analyzed(req_id, checks=(check("timeout.retry", CheckStatus.COMPLETE),))
+
+    with pytest.raises(ReviewException, match=RULE_PACK_INVALID):
+        score_requirements((analysis,), applicable)
+
+
+def test_score_uses_unique_scenario_category_denominator() -> None:
+    req_id = "REQ-1"
+    applicable = rules_by_requirement(
+        **{
+            req_id: (
+                rule("recovery.first", scenario_category="recovery"),
+                rule("recovery.second", scenario_category="recovery"),
+                rule("baseline.rule", scenario_category="baseline"),
+            )
+        }
+    )
+    analysis = analyzed(
+        req_id,
+        checks=(
+            check("recovery.first", CheckStatus.COMPLETE),
+            check("recovery.second", CheckStatus.COMPLETE),
+            check("baseline.rule", CheckStatus.COMPLETE),
+        ),
+        scenarios=(
+            scenario(
+                "recovery",
+                covered=True,
+                evidence=(source(1, "Quote for REQ-1", section="1.0 Overview"),),
+            ),
+        ),
+    )
+
+    score = score_requirements((analysis,), applicable)[0]
+
+    assert score.scenario_coverage == 50.00
 
 
 def test_score_rejects_zero_eligible_weight() -> None:

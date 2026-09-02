@@ -20,6 +20,31 @@ def _rule_pack_invalid(message: str, **details: object) -> ReviewException:
     return ReviewException(ReviewError(code=RULE_PACK_INVALID, message=message, details=details))
 
 
+def _duplicate_values(values: tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+            continue
+        seen.add(value)
+    return sorted(duplicates)
+
+
+def _validate_applicable_rules(
+    requirement_id: str,
+    rules: tuple[ApplicableRule, ...],
+) -> tuple[ApplicableRule, ...]:
+    duplicate_rule_ids = _duplicate_values(tuple(rule.rule_id for rule in rules))
+    if duplicate_rule_ids:
+        raise _rule_pack_invalid(
+            "需求的适用规则存在重复 rule_id",
+            requirement_id=requirement_id,
+            duplicates=duplicate_rule_ids,
+        )
+    return rules
+
+
 def _percent(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         raise _rule_pack_invalid("分母必须大于 0", denominator=denominator)
@@ -52,7 +77,10 @@ def score_requirements(
         )
 
     for analysis in analyses:
-        rules = tuple(applicable.get(analysis.requirement_id, ()))
+        rules = _validate_applicable_rules(
+            analysis.requirement_id,
+            tuple(applicable.get(analysis.requirement_id, ())),
+        )
         if not rules:
             raise _rule_pack_invalid(
                 "需求缺少适用规则",
