@@ -11,6 +11,8 @@ from ..models import AnalysisSubmission, ProviderMode
 class AnalysisProvider(Protocol):
     async def analyze(self, batch: AnalysisBatch) -> AnalysisSubmission: ...
 
+    async def aclose(self) -> None: ...
+
 
 def provider_unavailable(
     message: str,

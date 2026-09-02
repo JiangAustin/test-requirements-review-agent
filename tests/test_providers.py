@@ -304,3 +304,45 @@ async def test_adapter_reports_sanitized_details_for_http_failure() -> None:
         await provider(transport=httpx.MockTransport(handler)).analyze(batch())
 
     assert exc_info.value.error.details == {"status": 503, "attempt": 3, "type": "http_status"}
+
+
+@pytest.mark.asyncio
+async def test_adapter_wraps_non_timeout_transport_error_without_retry() -> None:
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("secret endpoint detail", request=request)
+
+    with pytest.raises(ReviewException, match=PROVIDER_UNAVAILABLE) as exc_info:
+        await provider(transport=httpx.MockTransport(handler)).analyze(batch())
+
+    assert attempts == 1
+    assert exc_info.value.error.details == {"type": "transport"}
+    assert "secret endpoint detail" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_adapter_closes_owned_client() -> None:
+    configured = provider(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+
+    await configured.aclose()
+
+    assert configured._client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_close_injected_client() -> None:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    configured = OpenAICompatibleProvider(
+        base_url="https://approved.example",
+        model="approved-model",
+        api_key=None,
+        client=client,
+    )
+
+    await configured.aclose()
+
+    assert not client.is_closed
+    await client.aclose()

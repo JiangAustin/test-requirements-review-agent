@@ -76,6 +76,11 @@ class OpenAICompatibleProvider:
                 if attempt >= 3:
                     raise last_error from exc
                 await self._sleep(float(attempt))
+            except httpx.RequestError as exc:
+                raise provider_unavailable(
+                    "Provider request failed.",
+                    failure_type="transport",
+                ) from exc
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 retriable = status == 429 or status >= 500
