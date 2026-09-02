@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.0",
+  "requirements": [
+    {
+      "requirement_id": "REQ-login-timeout",
+      "checks": [
+        {
+          "rule_id": "acceptance.criteria",
+          "status": "complete",
+          "impact": "both",
+          "severity": "important",
+          "finding_type": "fact",
+          "evidence": [
+            {
+              "page": 1,
+              "section": "1.2 Login",
+              "quote": "Users must log in within 30 seconds."
+            }
+          ],
+          "rationale": "验收条件明确写出 30 seconds。",
+          "confidence": 0.96
+        },
+        {
+          "rule_id": "timeout.retry",
+          "status": "missing",
+          "impact": "automation",
+          "severity": "blocking",
+          "finding_type": "suggestion",
+          "evidence": [],
+          "rationale": "Timeout handling is mentioned but retry strategy is absent.",
+          "question": "请补充 timeout retry 策略是什么？",
+          "confidence": 0.74
+        },
+        {
+          "rule_id": "legacy.manual",
+          "status": "not_applicable",
+          "impact": "manual",
+          "severity": "normal",
+          "finding_type": "suggestion",
+          "evidence": [],
+          "rationale": "该需求不涉及线下纸质流程。",
+          "confidence": 0.51
+        }
+      ],
+      "scenarios": [
+        {
+          "category": "baseline",
+          "description": "正常登录流程",
+          "covered": true,
+          "evidence": [
+            {
+              "page": 1,
+              "section": "1.2 Login",
+              "quote": "Users must log in within 30 seconds."
+            }
+          ]
+        },
+        {
+          "category": "recovery",
+          "description": "网络抖动后重试恢复",
+          "covered": false,
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "requirement_id": "REQ-export-format",
+      "checks": [
+        {
+          "rule_id": "export.format",
+          "status": "complete",
+          "impact": "both",
+          "severity": "important",
+          "finding_type": "fact",
+          "evidence": [
+            {
+              "page": 2,
+              "section": "2.1 Export",
+              "quote": "The report exports CSV and PDF."
+            }
+          ],
+          "rationale": "格式定义明确。",
+          "confidence": 0.93
+        },
+        {
+          "rule_id": "export.localization",
+          "status": "needs_confirmation",
+          "impact": "manual",
+          "severity": "normal",
+          "finding_type": "suggestion",
+          "evidence": [],
+          "rationale": "Need to confirm whether localized column headers are required.",
+          "question": "请确认 exported CSV 是否需要中文列名？",
+          "confidence": 0.68
+        }
+      ],
+      "scenarios": [
+        {
+          "category": "export",
+          "description": "导出报表",
+          "covered": true,
+          "evidence": [
+            {
+              "page": 2,
+              "section": "2.1 Export",
+              "quote": "The report exports CSV and PDF."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
