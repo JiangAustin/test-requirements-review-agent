@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import re
 from hashlib import sha256
-from typing import cast
 
 from .models import AtomicRequirement, ExtractedDocument, SourceRef
 
@@ -15,13 +15,22 @@ def normalize_requirements(document: ExtractedDocument) -> tuple[AtomicRequireme
     results: list[AtomicRequirement] = []
 
     for page in document.pages:
-        # tables first
+        # tables first: each non-empty data row => requirement
         for table in page.tables:
             for _r_idx, row in enumerate(table.cells):
+                # skip fully empty rows
+                if all((c is None or (isinstance(c, str) and not c.strip())) for c in row):
+                    continue
                 # join non-None with ' | '
                 parts = [c for c in row if c is not None]
                 text = " | ".join(parts)
-                bbox4 = cast(tuple[float, float, float, float], tuple(table.bbox))
+                bbox_raw = tuple(table.bbox)
+                bbox4 = (
+                    float(bbox_raw[0]),
+                    float(bbox_raw[1]),
+                    float(bbox_raw[2]),
+                    float(bbox_raw[3]),
+                )
                 src = SourceRef(
                     page=table.page,
                     quote=text or "",
@@ -30,7 +39,7 @@ def normalize_requirements(document: ExtractedDocument) -> tuple[AtomicRequireme
                     bbox=bbox4,
                 )
                 rid = _stable_id(src, text)
-                needs_manual = table.needs_manual_review
+                needs_manual = table.needs_manual_review or any(c is None for c in row)
                 results.append(
                     AtomicRequirement(
                         requirement_id=rid,
@@ -41,57 +50,72 @@ def normalize_requirements(document: ExtractedDocument) -> tuple[AtomicRequireme
                 )
 
         # then paragraphs / blocks
+        last_heading: str | None = None
         for block in page.blocks:
             txt = block.quote.strip()
             if not txt:
                 continue
-            # numbered/bulleted lines
-            lines = [line_var.strip() for line_var in txt.splitlines() if line_var.strip()]
-            split_items: list[str] = []
-            for line in lines:
-                if line.startswith("-") or line.startswith("*") or line.startswith("•"):
-                    split_items.append(line.lstrip("-*• "))
-                elif line and line[0].isdigit() and line[1:3] in (".", ") "):
-                    # handle '1.' or '1)'
-                    # crude split for leading digits
-                    import re
 
-                    m = re.match(r"^\d+[\.)]\s*(.*)$", line)
+            # heading detection (conservative)
+            # ends with ':' or '：' OR single short line without terminal punctuation
+            single_line = "\n" not in txt
+            ends_with_colon = txt.endswith(":") or txt.endswith("：")
+            short_no_punct = (
+                single_line
+                and len(txt) <= 40
+                and not re.search(r"[\.\?!。！？]$", txt)
+            )
+
+            if ends_with_colon or short_no_punct:
+                last_heading = txt.rstrip(":：").strip()
+                continue
+
+            # split only when the block is clearly a list: all non-empty lines are delimited
+            lines = [line.strip() for line in txt.splitlines() if line.strip()]
+            if not lines:
+                continue
+
+            def is_bullet_line(s: str) -> bool:
+                return bool(re.match(r"^\s*[-\*•]\s+", s))
+
+            def is_numbered_line(s: str) -> bool:
+                return bool(re.match(r"^\s*\d+[\.)]\s+", s))
+
+            all_delimited = (
+                len(lines) > 1
+                and all(
+                    is_bullet_line(line_text) or is_numbered_line(line_text)
+                    for line_text in lines
+                )
+            )
+
+            items: list[str]
+            if all_delimited:
+                items = []
+                for line in lines:
+                    m = re.match(r"^\s*[-\*•]\s+(.*)$", line)
                     if m:
-                        split_items.append(m.group(1))
-                    else:
-                        split_items.append(line)
-                else:
-                    split_items.append(line)
-
-            if len(split_items) > 1:
-                for item in split_items:
-                    src = SourceRef(
-                        page=block.page,
-                        quote=item,
-                        section=block.section,
-                        table_index=None,
-                        bbox=block.bbox,
-                    )
-                    rid = _stable_id(src, item)
-                    # assume single-line items are fine
-                    needs_manual = False
-                    results.append(
-                        AtomicRequirement(
-                            requirement_id=rid,
-                            text=item,
-                            sources=(src,),
-                            needs_manual_review=needs_manual,
-                        )
-                    )
+                        items.append(m.group(1).strip())
+                        continue
+                    m = re.match(r"^\s*(\d+)[\.)]\s+(.*)$", line)
+                    if m:
+                        items.append(m.group(2).strip())
+                        continue
+                    items.append(line)
             else:
-                item = split_items[0]
-                # ambiguous if multiple sentences
-                multi_sent = sum(item.count(p) for p in (". ", "? ", "! ")) >= 1
+                # keep whole block intact (no deterministic delimiter)
+                items = [txt]
+
+            for item in items:
+                # ambiguous if multiple sentences (support English + Chinese punctuation)
+                sentences = re.split(r"[\.\?!。！？]+", item.strip())
+                sentences = [s for s in sentences if s.strip()]
+                multi_sent = len(sentences) > 1
+
                 src = SourceRef(
                     page=block.page,
                     quote=item,
-                    section=block.section,
+                    section=last_heading,
                     table_index=None,
                     bbox=block.bbox,
                 )
