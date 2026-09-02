@@ -12,6 +12,7 @@ from requirements_review_agent.models import (
     CheckResult,
     CheckStatus,
     FindingType,
+    Impact,
     ProviderMode,
     RequirementAnalysis,
     ReviewReport,
@@ -152,6 +153,53 @@ def collect_docx_text(path: Path) -> str:
     return "\n".join(parts)
 
 
+def markdown_table_rows(markdown: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in markdown.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells: list[str] = []
+        current: list[str] = []
+        escaped = False
+        for char in line[1:]:
+            if escaped:
+                current.append(char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == "|":
+                cells.append("".join(current).strip().replace("<br>", "\n"))
+                current = []
+            else:
+                current.append(char)
+        if cells and not all(set(cell) <= {"-", ":"} for cell in cells):
+            rows.append(cells)
+    return rows
+
+
+def docx_table_rows(path: Path) -> list[list[str]]:
+    document = Document(path)
+    return [[cell.text for cell in row.cells] for table in document.tables for row in table.rows]
+
+
+def markdown_sections(markdown: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in markdown.splitlines():
+        if line.startswith("## "):
+            current = sections.setdefault(line[3:], [])
+        elif current is not None:
+            current.append(line)
+    return sections
+
+
+def evidence_text(evidence: tuple[SourceRef, ...]) -> str:
+    return "；".join(
+        f"p.{source.page} / {source.section or '（无章节）'}: “{source.quote}”"
+        for source in evidence
+    ) or "无"
+
+
 def test_workspace_agent_and_portable_config_contracts_exist() -> None:
     root = Path.cwd()
     agent_path = root / ".github" / "agents" / "requirements-review.agent.md"
@@ -248,6 +296,9 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
     report = ReviewReport.model_validate_json(artifacts.json.read_text(encoding="utf-8"))
     markdown_text = artifacts.markdown.read_text(encoding="utf-8")
     docx_text = collect_docx_text(status.artifacts.docx)
+    markdown_rows = markdown_table_rows(markdown_text)
+    sections = markdown_sections(markdown_text)
+    docx_rows = docx_table_rows(status.artifacts.docx)
 
     assert set(report.aggregate.model_dump(mode="json")) == {"testability", "scenario_coverage"}
     assert report.aggregate.testability >= 0
@@ -284,23 +335,51 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
         assert str(review.score.testability) in docx_text
         assert str(review.score.scenario_coverage) in markdown_text
         assert str(review.score.scenario_coverage) in docx_text
-        for source in review.requirement.sources:
-            assert source.quote in markdown_text
-            assert source.quote in docx_text
+        requirement_evidence = evidence_text(review.requirement.sources)
+        expected_matrix_row = [
+            review.requirement.requirement_id,
+            review.requirement.text,
+            str(review.score.testability),
+            str(review.score.scenario_coverage),
+        ]
+        assert any(
+            row[:4] == expected_matrix_row and row[6] == requirement_evidence
+            for row in markdown_rows
+            if len(row) == 7
+        )
+        assert any(
+            row[:4] == expected_matrix_row and row[6] == requirement_evidence
+            for row in docx_rows
+            if len(row) == 7
+        )
         for check in review.analysis.checks:
-            for evidence in check.evidence:
-                assert evidence.quote in markdown_text
-                assert evidence.quote in docx_text
             if check.status in {CheckStatus.MISSING, CheckStatus.NEEDS_CONFIRMATION}:
                 assert check.question is not None
-                assert check.question in markdown_text
-                assert check.question in docx_text
+                expected_gap_row = [
+                    review.requirement.requirement_id,
+                    check.rule_id,
+                    check.question,
+                    evidence_text(check.evidence),
+                ]
+                expected_gap_line = (
+                    f"- {review.requirement.requirement_id}: {check.question}；"
+                    f"证据：{evidence_text(check.evidence)}"
+                )
+                if check.impact in {Impact.MANUAL, Impact.BOTH}:
+                    assert expected_gap_line in sections["手动测试缺失信息"]
+                if check.impact in {Impact.AUTOMATION, Impact.BOTH}:
+                    assert expected_gap_line in sections["自动化测试缺失信息"]
+                assert expected_gap_row in docx_rows
         for scenario in review.analysis.scenarios:
-            assert scenario.category in markdown_text
-            assert scenario.category in docx_text
-            for evidence in scenario.evidence:
-                assert evidence.quote in markdown_text
-                assert evidence.quote in docx_text
+            expected_scenario_row = [
+                review.requirement.requirement_id,
+                scenario.category,
+                "是" if scenario.covered else "否",
+                scenario.description,
+                evidence_text(scenario.evidence),
+            ]
+            assert expected_scenario_row in markdown_rows
+            assert expected_scenario_row in docx_rows
 
     assert "需求可测试性得分（不是真实测试覆盖率）" in markdown_text
     assert "建议场景覆盖度（不是真实测试覆盖率）" in markdown_text
