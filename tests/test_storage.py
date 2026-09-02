@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ def test_create_run_persists_manifest_and_stage_roundtrip(tmp_path: Path) -> Non
     )
 
     assert manifest.run_id
+    assert re.fullmatch(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$", manifest.run_id)
     assert manifest.model_mode is ProviderMode.COPILOT
     assert manifest.stage == "created"
 
@@ -35,6 +37,25 @@ def test_create_run_persists_manifest_and_stage_roundtrip(tmp_path: Path) -> Non
     store.write_stage(manifest.run_id, "extracted", payload)
 
     assert store.read_stage(manifest.run_id, "extracted") == payload
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "run-1",
+        "20260902T103233Z-ABCDEF12",
+        "20260902T103233-abcdef12",
+        "20260902T103233Z-abcdef123",
+        "20260902t103233Z-abcdef12",
+    ],
+)
+def test_rejects_run_id_not_matching_timestamp_and_hex_format(
+    tmp_path: Path, run_id: str
+) -> None:
+    store = RunStore(tmp_path)
+
+    with pytest.raises(ValueError):
+        store.write_stage(run_id, "extracted", {"value": 1})
 
 
 @pytest.mark.parametrize(
@@ -95,6 +116,41 @@ def test_stage_write_is_atomic_and_cleans_temporary_file(
     assert not (run_dir / "extracted.json").exists()
     assert not (run_dir / "extracted.json.tmp").exists()
     assert (run_dir / "manifest.json").exists()
+
+
+def test_stage_write_preserves_existing_final_json_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RunStore(tmp_path)
+    manifest = store.create_run(
+        pdf_hash="abc123",
+        rule_version="2026-09-01",
+        model_mode="copilot",
+        schema_version="1.0",
+    )
+    old_payload = {"value": 1, "requirements": [{"requirement_id": "REQ-1"}]}
+    new_payload = {"value": 2}
+
+    store.write_stage(manifest.run_id, "extracted", old_payload)
+
+    run_dir = tmp_path / ".runs" / manifest.run_id
+    stage_path = run_dir / "extracted.json"
+    original_text = stage_path.read_text(encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_stage_replace(self: Path, target: Path) -> Path:
+        if self.name == "extracted.json.tmp":
+            raise OSError("disk full")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_stage_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.write_stage(manifest.run_id, "extracted", new_payload)
+
+    assert stage_path.read_text(encoding="utf-8") == original_text
+    assert store.read_stage(manifest.run_id, "extracted") == old_payload
+    assert not (run_dir / "extracted.json.tmp").exists()
 
 
 def test_resume_requires_exact_identity_fields(tmp_path: Path) -> None:

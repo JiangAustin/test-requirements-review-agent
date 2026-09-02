@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from .errors import ReviewError
 from .models import ProviderMode, RunManifest
 
-_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 _STAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _HASH_CHUNK_SIZE = 1024 * 1024
 
