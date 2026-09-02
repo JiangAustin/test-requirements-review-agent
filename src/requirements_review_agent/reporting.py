@@ -45,7 +45,9 @@ def write_markdown(report: ReviewReport, path: Path) -> None:
         "",
         "## 指标定义",
         "- 需求可测试性得分（不是真实测试覆盖率）：只根据适用检查项是否已明确计算。",
+        "- 需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率。",
         "- 建议场景覆盖度（不是真实测试覆盖率）：只表示建议测试场景对适用类别的覆盖程度。",
+        "- 建议场景覆盖度不表示现有用例覆盖率，也不表示测试执行覆盖率。",
         "- 整体需求可测试性得分（不是真实测试覆盖率）："
         f"{_format_score(report.aggregate.testability)}",
         "- 整体建议场景覆盖度（不是真实测试覆盖率）："
@@ -136,7 +138,9 @@ def write_docx(report: ReviewReport, path: Path) -> None:
 
     document.add_heading("指标定义", level=1)
     document.add_paragraph("需求可测试性得分（不是真实测试覆盖率）：只根据适用检查项是否已明确计算。")
+    document.add_paragraph("需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率。")
     document.add_paragraph("建议场景覆盖度（不是真实测试覆盖率）：只表示建议测试场景对适用类别的覆盖程度。")
+    document.add_paragraph("建议场景覆盖度不表示现有用例覆盖率，也不表示测试执行覆盖率。")
     document.add_paragraph(
         "整体需求可测试性得分（不是真实测试覆盖率）："
         f"{_format_score(report.aggregate.testability)}"

@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "requirements-review": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "requirements-review-mcp"]
+    }
+  }
+}
