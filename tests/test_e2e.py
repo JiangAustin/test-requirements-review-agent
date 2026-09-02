@@ -280,8 +280,19 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
     workspace.mkdir()
     rules_dir = workspace / "rules"
     rules_dir.mkdir()
+    rule_pack = Path("rules/home-iot-v1.yaml").read_text(encoding="utf-8")
+    rule_pack += """
+
+  - id: manual.operator_observation
+    question: "请确认 manual operator observation 的步骤与预期结果。"
+    weight: 3
+    impact: manual
+    scenario_category: manual-observation
+    always: true
+    keywords: []
+"""
     rules_dir.joinpath("home-iot-v1.yaml").write_text(
-        Path("rules/home-iot-v1.yaml").read_text(encoding="utf-8"),
+        rule_pack,
         encoding="utf-8",
     )
     pdf_path = build_text_table_pdf(workspace / "input.pdf")
@@ -331,6 +342,12 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
         for check in review.analysis.checks
         if check.status in {CheckStatus.MISSING, CheckStatus.NEEDS_CONFIRMATION}
     )
+    assert {Impact.MANUAL, Impact.AUTOMATION, Impact.BOTH} <= {
+        check.impact
+        for review in report.requirements
+        for check in review.analysis.checks
+        if check.status in {CheckStatus.MISSING, CheckStatus.NEEDS_CONFIRMATION}
+    }
     assert any(
         source.table_index is not None
         for review in report.requirements
