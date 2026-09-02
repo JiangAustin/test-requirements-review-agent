@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 from .errors import RULE_PACK_INVALID, ReviewError, ReviewException
 from .models import ApplicableRule, AtomicRequirement, RuleCheck
+
+QUESTION_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 class RulePack(BaseModel):
@@ -35,11 +44,20 @@ class RawRuleEntry(BaseModel):
     always: bool
     keywords: tuple[str, ...] = ()
 
-    @field_validator("id", "question")
+    @field_validator("id")
     @classmethod
     def validate_non_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("must not be blank")
+        return value
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        if QUESTION_CJK_RE.search(value) is None:
+            raise ValueError("must contain at least one Chinese character")
         return value
 
     @field_validator("scenario_category")

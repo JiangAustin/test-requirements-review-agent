@@ -126,6 +126,32 @@ rules:
     assert_invalid_rule_pack(path)
 
 
+def test_pure_english_question_is_rejected(tmp_path: Path) -> None:
+    path = write_pack(
+        tmp_path / "english-question.yaml",
+        """
+version: "1.0"
+rules:
+  - id: baseline.always
+    question: "请确认 baseline automation observability 已定义。"
+    weight: 1
+    impact: automation
+    scenario_category: baseline
+    always: true
+    keywords: []
+  - id: english.question
+    question: "Is the timeout defined?"
+    weight: 2
+    impact: manual
+    scenario_category: validation
+    always: false
+    keywords: ["wifi"]
+""".strip(),
+    )
+
+    assert_invalid_rule_pack(path)
+
+
 def test_no_always_rule_is_rejected(tmp_path: Path) -> None:
     path = write_pack(
         tmp_path / "no-always.yaml",
