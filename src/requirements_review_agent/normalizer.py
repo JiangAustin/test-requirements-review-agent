@@ -17,7 +17,7 @@ def normalize_requirements(document: ExtractedDocument) -> tuple[AtomicRequireme
     for page in document.pages:
         # tables first: each non-empty data row => requirement
         for table in page.tables:
-            for _r_idx, row in enumerate(table.cells):
+            for _r_idx, row in enumerate(table.cells[table.header_rows :]):
                 # skip fully empty rows
                 if all((c is None or (isinstance(c, str) and not c.strip())) for c in row):
                     continue

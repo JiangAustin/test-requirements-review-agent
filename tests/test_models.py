@@ -63,6 +63,14 @@ def test_valid_submission_is_accepted() -> None:
     assert submission.requirements[0].requirement_id == "REQ-a1b2c3d4"
 
 
+def test_submission_rejects_stale_schema_version() -> None:
+    payload = valid_payload()
+    payload["schema_version"] = "999.0"
+
+    with pytest.raises(ValidationError):
+        AnalysisSubmission.model_validate(payload)
+
+
 def test_fact_finding_requires_evidence() -> None:
     payload = valid_payload()
     payload["requirements"][0]["checks"][0]["finding_type"] = "fact"

@@ -282,6 +282,28 @@ async def test_local_provider_run_persists_analysis_and_closes_provider(
 
 
 @pytest.mark.asyncio
+async def test_provider_submission_with_stale_schema_is_rejected_and_closed(
+    workspace: Path, pdf: Path
+) -> None:
+    seed_service = ReviewService(workspace)
+    prepared = seed_service.prepare(pdf, "home-iot-v1", ProviderMode.LOCAL)
+    batch = seed_service.get_batch(prepared.run_id, 0)
+    valid = valid_submission_for(batch)
+    stale = AnalysisSubmission.model_construct(
+        schema_version="999.0",
+        requirements=valid.requirements,
+    )
+    fake_provider = FakeProvider(stale)
+    service = ReviewService(workspace, provider_factory=lambda _: fake_provider)
+
+    with pytest.raises(ReviewException, match=ANALYSIS_INVALID):
+        await service.run_provider(prepared.run_id)
+
+    assert fake_provider.closed is True
+    assert service.status(prepared.run_id).stage == "prepared"
+
+
+@pytest.mark.asyncio
 async def test_run_provider_rejects_copilot_and_submit_rejects_local_mode(
     service: ReviewService, workspace: Path, pdf: Path
 ) -> None:

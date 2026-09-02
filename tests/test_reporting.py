@@ -319,6 +319,26 @@ def test_render_all_does_not_catch_unexpected_docx_error(
         render_all(build_review_report(), tmp_path)
 
 
+@pytest.mark.parametrize("failed_writer", ["write_json", "write_markdown"])
+def test_text_report_failure_does_not_leave_orphan_docx(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_writer: str,
+) -> None:
+    complete = render_all(build_review_report(), tmp_path)
+    assert complete.docx is not None and complete.docx.exists()
+
+    def fail_writer(report: ReviewReport, path: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(f"requirements_review_agent.reporting.{failed_writer}", fail_writer)
+
+    with pytest.raises(OSError, match="disk full"):
+        render_all(build_review_report(), tmp_path)
+
+    assert not (tmp_path / "review.docx").exists()
+
+
 def test_partial_rerender_removes_stale_docx(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

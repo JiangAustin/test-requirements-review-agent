@@ -236,6 +236,9 @@ def render_all(report: ReviewReport, output_dir: Path) -> ReportArtifacts:
     markdown_path = output_dir / "review.md"
     docx_path = output_dir / "review.docx"
 
+    docx_path.unlink(missing_ok=True)
+    write_json(report, json_path)
+    write_markdown(report, markdown_path)
     try:
         write_docx(report, docx_path)
     except (OSError, PackageNotFoundError) as error:
@@ -255,9 +258,6 @@ def render_all(report: ReviewReport, output_dir: Path) -> ReportArtifacts:
         write_json(updated_report, json_path)
         write_markdown(updated_report, markdown_path)
         return ReportArtifacts(json=json_path, markdown=markdown_path, docx=None, status="partial")
-
-    write_json(report, json_path)
-    write_markdown(report, markdown_path)
     return ReportArtifacts(
         json=json_path,
         markdown=markdown_path,

@@ -9,7 +9,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .analysis import AnalysisBatch, build_analysis_batch, validate_submission
+from .analysis import (
+    ANALYSIS_SCHEMA_VERSION,
+    AnalysisBatch,
+    build_analysis_batch,
+    validate_submission,
+)
 from .errors import (
     ANALYSIS_INVALID,
     PROVIDER_UNAVAILABLE,
@@ -36,7 +41,7 @@ from .rules import load_rule_pack, select_applicable_rules
 from .scoring import aggregate_scores, score_requirements
 from .storage import RunStore
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = ANALYSIS_SCHEMA_VERSION
 _SERVICE_STAGES = {"prepared", "analyzed", "finalized", "partial", "failed"}
 
 

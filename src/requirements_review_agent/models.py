@@ -57,6 +57,7 @@ class ExtractedTable(BaseModel):
     bbox: tuple[float, float, float, float]
     cells: tuple[tuple[str | None, ...], ...]
     needs_manual_review: bool
+    header_rows: int = Field(default=0, ge=0)
 
 
 class ExtractedPage(BaseModel):
@@ -154,7 +155,7 @@ class RequirementAnalysis(BaseModel):
 class AnalysisSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str
+    schema_version: Literal["1.0"]
     requirements: tuple[RequirementAnalysis, ...]
 
 

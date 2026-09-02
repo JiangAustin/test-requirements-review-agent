@@ -252,6 +252,7 @@
       "type": "array"
     },
     "schema_version": {
+      "const": "1.0",
       "title": "Schema Version",
       "type": "string"
     }

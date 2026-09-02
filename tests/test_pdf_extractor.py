@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from requirements_review_agent.errors import ReviewException
+from requirements_review_agent.normalizer import normalize_requirements
 from requirements_review_agent.pdf_extractor import extract_pdf
 from tests.fixtures.build_pdfs import (
     build_damaged_pdf,
@@ -26,6 +27,10 @@ def test_extracts_text_table_and_one_based_sources(tmp_path: Path) -> None:
     # convert to lists for easier assertion
     cells = [[c for c in row] for row in first_table.cells]
     assert ["Timeout", "30 s"] in cells
+    assert first_table.header_rows == 1
+    requirements = normalize_requirements(result)
+    assert "Param | Value" not in {item.text for item in requirements}
+    assert "Timeout | 30 s" in {item.text for item in requirements}
     # blocks should include bbox and document should have sha256
     assert result.pages[0].blocks
     assert isinstance(result.pages[0].blocks[0].bbox, tuple)

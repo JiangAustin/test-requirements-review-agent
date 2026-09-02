@@ -87,6 +87,7 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                     ) from exc
 
                 for ti, table in enumerate(tlist):
+                    extracted_cells = True
                     try:
                         raw = table.extract()
                     except ReviewException:
@@ -97,9 +98,20 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                         # failing the whole PDF. This keeps the table bbox/index
                         # and signals manual review is required.
                         raw = ((None,),)
+                        extracted_cells = False
                     cells = tuple(tuple(cell for cell in row) for row in raw)
                     bbox = tuple(getattr(table, "bbox", (0.0, 0.0, 0.0, 0.0)))
                     needs_manual = any(cell is None for row in cells for cell in row)
+                    header = getattr(table, "header", None)
+                    header_names = tuple(getattr(header, "names", ()))
+                    header_rows = int(
+                        extracted_cells
+                        and bool(cells)
+                        and header is not None
+                        and not bool(getattr(header, "external", True))
+                        and bool(header_names)
+                        and cells[0] == header_names
+                    )
                     tables.append(
                         ExtractedTable(
                             page=pnum,
@@ -107,6 +119,7 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                             bbox=bbox,
                             cells=cells,
                             needs_manual_review=needs_manual,
+                            header_rows=header_rows,
                         )
                     )
 

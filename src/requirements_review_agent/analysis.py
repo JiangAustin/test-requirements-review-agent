@@ -18,6 +18,7 @@ from .models import (
 )
 
 QUESTION_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+ANALYSIS_SCHEMA_VERSION = "1.0"
 
 
 class AnalysisBatch(BaseModel):
@@ -193,6 +194,11 @@ def validate_submission(
     applicable: Mapping[str, tuple[ApplicableRule, ...]],
 ) -> tuple[RequirementAnalysis, ...]:
     parsed = _coerce_submission(submission)
+    if parsed.schema_version != ANALYSIS_SCHEMA_VERSION:
+        raise _analysis_invalid(
+            "分析结果 schema_version 不匹配",
+            expected=ANALYSIS_SCHEMA_VERSION,
+        )
     ordered_applicable = _ordered_applicable(requirements, applicable)
     requirement_by_id = {requirement.requirement_id: requirement for requirement in requirements}
     expected_ids = set(requirement_by_id)
@@ -222,4 +228,9 @@ def validate_submission(
     return analyses
 
 
-__all__ = ["AnalysisBatch", "build_analysis_batch", "validate_submission"]
+__all__ = [
+    "ANALYSIS_SCHEMA_VERSION",
+    "AnalysisBatch",
+    "build_analysis_batch",
+    "validate_submission",
+]
