@@ -91,16 +91,12 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                         raw = table.extract()
                     except ReviewException:
                         raise
-                    except Exception as exc:
-                        # treat table extraction failure as damaged PDF rather than
-                        # faking empty table
-                        raise ReviewException(
-                            ReviewError(
-                                code=PDF_DAMAGED,
-                                message="table extraction failed",
-                                details={"error": repr(exc)},
-                            )
-                        ) from exc
+                    except Exception:
+                        # If table metadata is available but cell extraction fails,
+                        # preserve a minimal placeholder table row rather than
+                        # failing the whole PDF. This keeps the table bbox/index
+                        # and signals manual review is required.
+                        raw = ((None,),)
                     cells = tuple(tuple(cell for cell in row) for row in raw)
                     bbox = tuple(getattr(table, "bbox", (0.0, 0.0, 0.0, 0.0)))
                     needs_manual = any(cell is None for row in cells for cell in row)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -70,3 +71,46 @@ def test_find_tables_failure_maps_to_damaged(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(_fitz.Page, "find_tables", _raise_find)
     with pytest.raises(ReviewException, match="PDF_DAMAGED"):
         extract_pdf(pdf, tmp_path)
+
+
+def test_table_extract_exception_preserved(tmp_path: Path, monkeypatch) -> None:
+    """When table.extract() raises, extraction should succeed but the table
+    must be preserved as a placeholder ((None,),) and marked needs_manual_review.
+    Normalizer must not produce an empty AtomicRequirement for that placeholder.
+    """
+    pdf = build_text_table_pdf(tmp_path / "mixed.pdf")
+    import fitz as _fitz
+
+    from requirements_review_agent.normalizer import normalize_requirements
+
+    orig_find = _fitz.Page.find_tables
+
+    def _wrapper_find(self):
+        finder = orig_find(self)
+        for t in list(getattr(finder, "tables", [])):
+            def _raise_extract():
+                raise RuntimeError("extract failed")
+
+            # bind to instance (best-effort; some table objects are C-extension types)
+            with contextlib.suppress(Exception):
+                t.extract = _raise_extract
+
+        return finder
+
+    monkeypatch.setattr(_fitz.Page, "find_tables", _wrapper_find)
+
+    result = extract_pdf(pdf, tmp_path)
+    assert result.pages[0].tables
+    t = result.pages[0].tables[0]
+    assert t.page == 1
+    assert t.table_index == 0
+    assert isinstance(t.bbox, tuple)
+    assert t.cells == ((None,),)
+    assert t.needs_manual_review is True
+
+    # Normalizer should not generate an empty AtomicRequirement for the placeholder
+    items = normalize_requirements(result)
+    # ensure none of the normalized items claim the table_index 0 from page 1
+    assert not any(
+        it.sources[0].page == 1 and it.sources[0].table_index == 0 for it in items
+    )
