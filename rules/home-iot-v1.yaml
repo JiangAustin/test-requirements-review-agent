@@ -1,0 +1,33 @@
+version: '1.0'
+rules:
+  - id: connectivity.preconditions
+    question: "始终检查设备在开始连接前已启用 Wi-Fi 并配置 SSID/密码 (Wi‑Fi)"
+    weight: 5
+    impact: automation
+    scenario_category: connectivity
+    always: true
+    keywords: ["wifi", "wi-fi", "wifi", "connectivity"]
+
+  - id: recovery.connection_loss
+    question: "当连接丢失时，应有重连或降级方案 (recovery, connection loss)"
+    weight: 4
+    impact: both
+    scenario_category: recovery
+    always: false
+    keywords: ["connection loss", "disconnect", "wifi", "reconnect"]
+
+  - id: automation.observability
+    question: "自动化检查应记录可观测性指标以验证连接和重试行为 (observability)"
+    weight: 3
+    impact: automation
+    scenario_category: observability
+    always: false
+    keywords: ["observability", "metrics", "logging", "wifi"]
+
+  - id: security.permissions
+    question: "验证权限与认证流程不会泄露敏感信息 (permissions/security)"
+    weight: 3
+    impact: manual
+    scenario_category: security
+    always: false
+    keywords: ["permission", "auth", "security"]
