@@ -5,6 +5,8 @@ from pathlib import Path
 
 import fitz
 from docx import Document
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 
 from requirements_review_agent.analysis import AnalysisBatch
 from requirements_review_agent.models import (
@@ -177,9 +179,16 @@ def markdown_table_rows(markdown: str) -> list[list[str]]:
     return rows
 
 
-def docx_table_rows(path: Path) -> list[list[str]]:
+def docx_tables_by_heading(path: Path) -> dict[str, list[list[str]]]:
     document = Document(path)
-    return [[cell.text for cell in row.cells] for table in document.tables for row in table.rows]
+    tables: dict[str, list[list[str]]] = {}
+    heading: str | None = None
+    for block in document.iter_inner_content():
+        if isinstance(block, Paragraph) and block.style.name.startswith("Heading"):
+            heading = block.text
+        elif isinstance(block, Table) and heading is not None:
+            tables[heading] = [[cell.text for cell in row.cells] for row in block.rows]
+    return tables
 
 
 def markdown_sections(markdown: str) -> dict[str, list[str]]:
@@ -298,7 +307,7 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
     docx_text = collect_docx_text(status.artifacts.docx)
     markdown_rows = markdown_table_rows(markdown_text)
     sections = markdown_sections(markdown_text)
-    docx_rows = docx_table_rows(status.artifacts.docx)
+    docx_tables = docx_tables_by_heading(status.artifacts.docx)
 
     assert set(report.aggregate.model_dump(mode="json")) == {"testability", "scenario_coverage"}
     assert report.aggregate.testability >= 0
@@ -349,7 +358,7 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
         )
         assert any(
             row[:4] == expected_matrix_row and row[6] == requirement_evidence
-            for row in docx_rows
+            for row in docx_tables["需求评审矩阵"]
             if len(row) == 7
         )
         for check in review.analysis.checks:
@@ -369,7 +378,10 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
                     assert expected_gap_line in sections["手动测试缺失信息"]
                 if check.impact in {Impact.AUTOMATION, Impact.BOTH}:
                     assert expected_gap_line in sections["自动化测试缺失信息"]
-                assert expected_gap_row in docx_rows
+                if check.impact in {Impact.MANUAL, Impact.BOTH}:
+                    assert expected_gap_row in docx_tables["手动测试缺失信息"]
+                if check.impact in {Impact.AUTOMATION, Impact.BOTH}:
+                    assert expected_gap_row in docx_tables["自动化测试缺失信息"]
         for scenario in review.analysis.scenarios:
             expected_scenario_row = [
                 review.requirement.requirement_id,
@@ -379,7 +391,7 @@ def test_text_table_pdf_produces_consistent_local_artifacts(tmp_path: Path) -> N
                 evidence_text(scenario.evidence),
             ]
             assert expected_scenario_row in markdown_rows
-            assert expected_scenario_row in docx_rows
+            assert expected_scenario_row in docx_tables["建议场景"]
 
     assert "需求可测试性得分（不是真实测试覆盖率）" in markdown_text
     assert "建议场景覆盖度（不是真实测试覆盖率）" in markdown_text
