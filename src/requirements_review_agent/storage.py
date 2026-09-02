@@ -75,6 +75,9 @@ class RunStore:
         self._runs_root = (self._workspace / ".runs").resolve()
         self._runs_root.mkdir(parents=True, exist_ok=True)
 
+    def run_path(self, run_id: str) -> Path:
+        return self._run_dir(run_id)
+
     def create_run(
         self,
         *,
