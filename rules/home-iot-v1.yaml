@@ -1,33 +1,105 @@
-version: '1.0'
+version: "1.0"
 rules:
-  - id: connectivity.preconditions
-    question: "始终检查设备在开始连接前已启用 Wi-Fi 并配置 SSID/密码 (Wi‑Fi)"
+  - id: behavior.acceptance
+    question: "请确认 acceptance criteria 明确描述设备行为、成功条件与失败条件。"
     weight: 5
-    impact: automation
-    scenario_category: connectivity
+    impact: both
+    scenario_category: behavior
     always: true
-    keywords: ["wifi", "wi-fi", "wifi", "connectivity"]
+    keywords: []
 
-  - id: recovery.connection_loss
-    question: "当连接丢失时，应有重连或降级方案 (recovery, connection loss)"
+  - id: preconditions.state
+    question: "请确认 preconditions 与 state 说明了启动前配置、网络状态与设备准备条件。"
+    weight: 5
+    impact: both
+    scenario_category: state
+    always: true
+    keywords: []
+
+  - id: boundaries.invalid_input
+    question: "请确认 invalid input、boundary values 与异常参数处理路径已定义。"
     weight: 4
+    impact: both
+    scenario_category: boundaries
+    always: false
+    keywords: ["invalid input", "boundary", "null", "empty", "range"]
+
+  - id: timeout.retry.recovery
+    question: "请确认 timeout、retry 与 recovery 策略覆盖失败检测、回退与恢复。"
+    weight: 5
     impact: both
     scenario_category: recovery
     always: false
-    keywords: ["connection loss", "disconnect", "wifi", "reconnect"]
+    keywords: ["timeout", "retry", "recovery", "backoff", "reconnect"]
 
-  - id: automation.observability
-    question: "自动化检查应记录可观测性指标以验证连接和重试行为 (observability)"
-    weight: 3
+  - id: dependency.device_app_cloud
+    question: "请确认 device-App-Cloud dependency、同步顺序与接口边界已说明。"
+    weight: 4
+    impact: both
+    scenario_category: dependency
+    always: false
+    keywords: ["device", "app", "cloud", "sync", "backend"]
+
+  - id: dependency.ble_wifi
+    question: "请确认 BLE 与 Wi-Fi dependency、配对切换与网络前提条件已定义。"
+    weight: 5
+    impact: both
+    scenario_category: dependency
+    always: false
+    keywords: ["BLE", "bluetooth", "Wi-Fi", "wifi", "pairing"]
+
+  - id: permissions.security.privacy
+    question: "请确认 permissions、security 与 privacy 约束覆盖凭证、授权与日志脱敏。"
+    weight: 5
+    impact: both
+    scenario_category: security
+    always: false
+    keywords: ["permission", "security", "privacy", "credential", "token"]
+
+  - id: performance.compatibility
+    question: "请确认 performance 指标与 compatibility 范围覆盖平台、版本与延迟目标。"
+    weight: 4
+    impact: both
+    scenario_category: performance
+    always: false
+    keywords: ["performance", "compatibility", "latency", "android", "ios"]
+
+  - id: automation.interface_data
+    question: "请确认 automation interface、data schema 与事件契约可被稳定验证。"
+    weight: 4
+    impact: automation
+    scenario_category: automation
+    always: false
+    keywords: ["API", "payload", "schema", "event", "telemetry"]
+
+  - id: automation.observability.reset
+    question: "请确认 observability、reset 与清理步骤可用于 automation 回归与故障定位。"
+    weight: 4
     impact: automation
     scenario_category: observability
     always: false
-    keywords: ["observability", "metrics", "logging", "wifi"]
+    keywords: ["observability", "metrics", "logging", "reset", "telemetry"]
 
-  - id: security.permissions
-    question: "验证权限与认证流程不会泄露敏感信息 (permissions/security)"
-    weight: 3
-    impact: manual
-    scenario_category: security
+  - id: connectivity.preconditions
+    question: "请确认 Wi-Fi onboarding 前提包含 SSID、凭证、网络可达性与连接初始化步骤。"
+    weight: 5
+    impact: both
+    scenario_category: connectivity
     always: false
-    keywords: ["permission", "auth", "security"]
+    keywords: ["Wi-Fi", "wifi", "SSID", "connect", "onboarding"]
+
+  - id: recovery.connection_loss
+    question: "请确认 connection loss 后的 retry、reconnect 与 degraded mode 处理已定义。"
+    weight: 5
+    impact: both
+    scenario_category: recovery
+    always: false
+    keywords: ["Wi-Fi", "wifi", "disconnect", "reconnect", "connection loss"]
+
+  - id: automation.observability
+    question: "请确认 automation observability 覆盖 Wi-Fi 连接、retry 结果与故障证据采集。"
+    weight: 4
+    impact: automation
+    scenario_category: observability
+    always: false
+    keywords: ["Wi-Fi", "wifi", "observability", "metrics", "logging"]
