@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
+from requirements_review_agent import cli
 from requirements_review_agent.cli import main
+
+
+def test_atomic_write_retries_transient_windows_replace_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "state.json"
+    target.write_text("old", encoding="utf-8")
+    original_replace = os.replace
+    attempts = 0
+
+    def flaky_replace(source: str | Path, destination: str | Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("transient lock")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(cli.os, "replace", flaky_replace)
+
+    cli._write_text_atomic(target, "new")
+
+    assert attempts == 2
+    assert target.read_text(encoding="utf-8") == "new"
 
 
 def test_init_creates_portable_workspace_configuration(tmp_path: Path) -> None:
@@ -43,6 +68,157 @@ def test_init_is_idempotent_and_preserves_other_mcp_servers(tmp_path: Path) -> N
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
     assert config["servers"]["existing"]["command"] == "other"
+
+
+def test_init_records_managed_agent_hash(tmp_path: Path) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+
+    state = json.loads(
+        (tmp_path / ".vscode" / "requirements-review-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    agent = (tmp_path / ".github" / "agents" / "requirements-review.agent.md").read_text(
+        encoding="utf-8"
+    )
+    assert state == {"schema_version": 1, "agent_sha256": cli._sha256_text(agent)}
+
+
+def test_init_upgrades_unmodified_managed_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    original_resource_text = cli._resource_text
+    upgraded_agent = original_resource_text("requirements-review.agent.md") + "\n升级模板\n"
+    monkeypatch.setattr(cli, "_resource_text", lambda *parts: upgraded_agent)
+
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    state = json.loads(
+        (tmp_path / ".vscode" / "requirements-review-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert agent.read_text(encoding="utf-8") == upgraded_agent
+    assert state["agent_sha256"] == cli._sha256_text(upgraded_agent)
+
+
+def test_init_refuses_upgrade_after_managed_agent_was_modified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "\nuser change\n", encoding="utf-8")
+    upgraded_agent = cli._resource_text("requirements-review.agent.md") + "\n升级模板\n"
+    monkeypatch.setattr(cli, "_resource_text", lambda *parts: upgraded_agent)
+
+    with pytest.raises(SystemExit, match="用户修改"):
+        main(["init", "--workspace", str(tmp_path)])
+
+    assert agent.read_text(encoding="utf-8").endswith("user change\n")
+
+
+def test_init_refuses_upgrade_when_managed_state_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    original_agent = agent.read_text(encoding="utf-8")
+    state = tmp_path / ".vscode" / "requirements-review-state.json"
+    state.write_text("not json", encoding="utf-8")
+    upgraded_agent = cli._resource_text("requirements-review.agent.md") + "\n升级模板\n"
+    monkeypatch.setattr(cli, "_resource_text", lambda *parts: upgraded_agent)
+
+    with pytest.raises(SystemExit, match="无法读取"):
+        main(["init", "--workspace", str(tmp_path)])
+
+    assert agent.read_text(encoding="utf-8") == original_agent
+
+
+@pytest.mark.parametrize(
+    "invalid_state",
+    [
+        {"schema_version": True, "agent_sha256": "a" * 64},
+        {"schema_version": 1, "agent_sha256": "not-a-sha256"},
+        {"schema_version": 1, "agent_sha256": "a" * 64, "pending_agent_sha256": 1},
+    ],
+)
+def test_init_refuses_structurally_invalid_managed_state(
+    tmp_path: Path, invalid_state: dict[str, object]
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    original_agent = agent.read_text(encoding="utf-8")
+    state = tmp_path / ".vscode" / "requirements-review-state.json"
+    state.write_text(json.dumps(invalid_state), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="不是有效"):
+        main(["init", "--workspace", str(tmp_path)])
+
+    assert agent.read_text(encoding="utf-8") == original_agent
+
+
+def test_init_recovers_interrupted_managed_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    state_path = tmp_path / ".vscode" / "requirements-review-state.json"
+    version_one = agent.read_text(encoding="utf-8")
+    version_two = version_one + "\nversion two\n"
+    version_three = version_two + "\nversion three\n"
+    agent.write_text(version_two, encoding="utf-8")
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "agent_sha256": cli._sha256_text(version_one),
+                "pending_agent_sha256": cli._sha256_text(version_two),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "_resource_text", lambda *parts: version_three)
+
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+
+    assert agent.read_text(encoding="utf-8") == version_three
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "agent_sha256": cli._sha256_text(version_three),
+    }
+
+
+def test_init_migrates_known_legacy_agent_without_state(tmp_path: Path) -> None:
+    current = cli._resource_text("requirements-review.agent.md")
+    current_constraint = (
+        "- 第 1 步只要求 workspace-local PDF path。"
+        "Chat 已附加 PDF 时，直接使用 attachment metadata 中位于 "
+        "`requirements/` 下的路径，不重复询问。附件不在 `requirements/` 时，"
+        "要求用户先上传到该目录。rule pack 默认 `home-iot-v1`，"
+        "model mode 默认 `copilot`；除非用户主动指定，否则不询问并使用默认值。"
+        "model mode 只接受 copilot、company_api、local。"
+    )
+    legacy_constraint = (
+        "- 第 1 步必须要求用户提供 workspace-local PDF path、rule pack 与 model mode，"
+        "只接受 copilot、company_api、local。"
+    )
+    legacy = current.replace(
+        "1. 从 Chat attachment metadata 读取 `requirements/` 下的 PDF 路径；"
+        "没有附件时询问该目录内的 PDF 路径",
+        "1. 询问工作区内的 PDF 路径、rule pack 和模式",
+    ).replace(current_constraint, legacy_constraint)
+    assert cli._sha256_text(legacy) == (
+        "fdcd19fa755a1bed9abcbc3d8e76e6c2db6d960b9bf0f90ae62c4f8155266987"
+    )
+    agent = tmp_path / ".github" / "agents" / "requirements-review.agent.md"
+    agent.parent.mkdir(parents=True)
+    agent.write_text(legacy, encoding="utf-8")
+
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    assert agent.read_text(encoding="utf-8") == current
+    assert (tmp_path / ".vscode" / "requirements-review-state.json").is_file()
 
 
 def test_init_refuses_to_replace_conflicting_agent(tmp_path: Path) -> None:
