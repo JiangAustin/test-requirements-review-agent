@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 requirements-review-mcp = "requirements_review_agent.server:main"
+rra = "requirements_review_agent.cli:main"
 
 [dependency-groups]
 dev = [

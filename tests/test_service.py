@@ -43,6 +43,44 @@ def build_pdf(path: Path) -> Path:
     return path
 
 
+def test_prepare_uses_bundled_rule_pack_when_workspace_has_no_rules(tmp_path: Path) -> None:
+    pdf = build_pdf(tmp_path / "requirements.pdf")
+
+    prepared = ReviewService(tmp_path).prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+
+    assert prepared.requirement_count == 1
+
+
+def test_prepare_prefers_workspace_rule_pack_over_bundled(tmp_path: Path) -> None:
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "home-iot-v1.yaml").write_text(
+        """
+version: "1.0"
+rules:
+  - id: workspace.override
+    question: "请确认 workspace override 已应用。"
+    weight: 1
+    impact: both
+    scenario_category: override
+    always: true
+    keywords: []
+""".strip(),
+        encoding="utf-8",
+    )
+    pdf = build_pdf(tmp_path / "requirements.pdf")
+    service = ReviewService(tmp_path)
+
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+    batch = service.get_batch(prepared.run_id, 0)
+
+    assert {
+        rule.rule_id
+        for applicable in batch.applicable.values()
+        for rule in applicable
+    } == {"workspace.override"}
+
+
 def requirement_source(requirement: object) -> SourceRef:
     return SourceRef.model_validate(requirement.sources[0].model_dump(mode="json"))
 

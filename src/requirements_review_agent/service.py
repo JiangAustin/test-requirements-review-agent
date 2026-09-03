@@ -37,7 +37,7 @@ from .normalizer import normalize_requirements
 from .pdf_extractor import extract_pdf
 from .providers import AnalysisProvider, build_provider
 from .reporting import render_all
-from .rules import load_rule_pack, select_applicable_rules
+from .rules import load_bundled_rule_pack, load_rule_pack, select_applicable_rules
 from .scoring import aggregate_scores, score_requirements
 from .storage import RunStore
 
@@ -96,7 +96,11 @@ class ReviewService:
         if not requirements:
             raise _analysis_invalid("未提取到可分析的需求", stage="prepare")
 
-        pack = load_rule_pack(rule_path)
+        pack = (
+            load_rule_pack(rule_path)
+            if rule_path is not None
+            else load_bundled_rule_pack(rule_pack)
+        )
         applicable = {
             requirement.requirement_id: select_applicable_rules(requirement, pack)
             for requirement in requirements
@@ -291,7 +295,7 @@ class ReviewService:
     def _default_provider_factory(self, mode: ProviderMode) -> AnalysisProvider | None:
         return build_provider(mode, os.environ)
 
-    def _resolve_rule_pack(self, rule_pack: str) -> Path:
+    def _resolve_rule_pack(self, rule_pack: str) -> Path | None:
         candidate = Path(rule_pack)
         if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
             raise _rule_pack_invalid("规则包路径非法", rule_pack=rule_pack)
@@ -303,9 +307,7 @@ class ReviewService:
         resolved = (self._rules_root / filename).resolve()
         if not resolved.is_relative_to(self._rules_root):
             raise _rule_pack_invalid("规则包路径非法", rule_pack=rule_pack)
-        if not resolved.exists():
-            raise _rule_pack_invalid("规则包不存在", rule_pack=rule_pack)
-        return resolved
+        return resolved if resolved.exists() else None
 
     def _load_state(self, run_id: str) -> dict[str, Any]:
         try:
