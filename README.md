@@ -8,21 +8,45 @@
 - limits：当前仅支持 text-table PDF only，no OCR，不支持 scanned PDF、图片 OCR、远程文件存储，也不计算现有 test-case coverage 或测试执行覆盖率。
 - metrics disclaimer：需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率。建议场景覆盖度不是现有用例覆盖率，也不是测试执行覆盖率。
 
-## 前置条件
+## 一键接入任意项目
 
-- Python >=3.12,<3.14
-- uv
-- VS Code
-- GitHub Copilot chat 权限
-- Copilot Business 或 Enterprise 环境下，管理员需要允许 MCP admin enablement
+前置条件：安装 [uv](https://docs.astral.sh/uv/)、VS Code，并具备 GitHub Copilot Chat 权限。Copilot Business 或 Enterprise 环境还需要管理员允许 MCP admin enablement。
 
-## Windows PowerShell 命令
+在需要评审需求的目标项目根目录运行一条命令：
 
-在 repository root 打开工作区，然后执行：
+```powershell
+uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git rra init
+```
+
+该命令会幂等创建或合并：
+
+- `.github/agents/requirements-review.agent.md`
+- `.vscode/mcp.json`
+- `.gitignore` 中的 `.runs/`、`.env`、`inputs/`
+
+它不会覆盖已有的不同 Agent 文件或同名 MCP server 配置；发生冲突时会停止并说明路径。默认 `home-iot-v1` rule pack 已内置，不需要复制 `rules/` 目录。
+
+初始化后在 VS Code 执行 Reload Window，打开 Copilot Chat 并选择 **Requirements Review**。首次启动 MCP 时需要网络访问 GitHub，并在 VS Code 中确认 workspace trust 与 MCP start/trust。
+
+可选健康检查：
+
+```powershell
+uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git rra doctor
+```
+
+`doctor` 检查 `uvx`、Agent、MCP 配置和内置 rule pack；全部正常时退出码为 0。
+
+## Rule pack 覆盖
+
+默认直接使用内置 `home-iot-v1`。如需项目定制，在目标项目创建 `rules/<name>.yaml`，评审时传入 `<name>`；项目文件优先于同名内置 rule pack。PDF 仍必须位于当前 workspace 内，运行产物写入当前项目的 `.runs/`。
+
+## 仓库开发
+
+开发本项目需要 Python >=3.12,<3.14。在 repository root 执行：
 
 ```powershell
 uv sync --dev
-uv run pytest
+uv run python -m pytest
 uv run ruff check .
 uv run mypy src
 uv run mcp dev src/requirements_review_agent/server.py
@@ -30,14 +54,15 @@ uv run mcp dev src/requirements_review_agent/server.py
 
 ## 打开仓库与发现 Agent
 
-- 必须打开 repository root，而不是只打开子目录，否则 custom Agent discovery、rules 和 .vscode/mcp.json 可能失效。
+- 开发时必须打开 repository root，而不是只打开子目录，否则 custom Agent discovery 和 .vscode/mcp.json 可能失效。
 - Agent 文件位于 .github/agents/requirements-review.agent.md，名称是 Requirements Review。
 - 在 Copilot Chat 中选择 Agent 时，确认看到 Requirements Review。
 - 如需检查 Chat customization diagnostics，可打开 Problems panel，查看 .github/agents/requirements-review.agent.md 的 frontmatter 或正文告警。
 
 ## MCP 启动与信任
 
-- MCP 配置位于 .vscode/mcp.json，使用 portable command：uv run requirements-review-mcp。
+- `rra init` 生成的 MCP 配置通过 `uvx` 从 GitHub 获取并缓存 service，不要求目标项目创建 Python virtual environment。
+- 本仓库自己的开发配置位于 .vscode/mcp.json，使用 `uv run requirements-review-mcp`。
 - 首次加载时在 VS Code 中信任 workspace，并允许 MCP start/trust。
 - 可通过 MCP: List Servers 检查 requirements-review 是否已注册并启动。
 - 用于开发调试的命令是 uv run mcp dev src/requirements_review_agent/server.py。

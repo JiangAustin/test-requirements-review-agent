@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,33 @@ def load_rule_pack(path: Path) -> RulePack:
         raise
     except (OSError, yaml.YAMLError, ValidationError, TypeError, ValueError) as exc:
         raise _invalid_rule_pack(path, exc) from exc
+
+
+def load_bundled_rule_pack(name: str) -> RulePack:
+    filename = f"{name}.yaml"
+    resource = files("requirements_review_agent").joinpath("resources", "rules", filename)
+    try:
+        loaded: Any = yaml.safe_load(resource.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise TypeError("rule pack root must be a mapping")
+        raw_pack = RawRulePack.model_validate(loaded)
+        pack = RulePack(
+            version=raw_pack.version,
+            rules=tuple(_build_rule_check(raw_rule) for raw_rule in raw_pack.rules),
+        )
+        _validate_rule_pack(Path(f"built-in:{filename}"), pack)
+        return pack
+    except ReviewException:
+        raise
+    except (
+        FileNotFoundError,
+        OSError,
+        yaml.YAMLError,
+        ValidationError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise _invalid_rule_pack(Path(f"built-in:{filename}"), exc) from exc
 
 
 def select_applicable_rules(

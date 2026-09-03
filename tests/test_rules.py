@@ -35,6 +35,15 @@ def test_wifi_requirement_selects_required_rules() -> None:
     }
 
 
+def test_bundled_rule_pack_matches_repository_rule_pack() -> None:
+    bundled = Path(
+        "src/requirements_review_agent/resources/rules/home-iot-v1.yaml"
+    ).read_text(encoding="utf-8")
+    repository = Path("rules/home-iot-v1.yaml").read_text(encoding="utf-8")
+
+    assert bundled == repository
+
+
 def test_case_insensitive_keyword_match() -> None:
     pack = load_rule_pack(Path("rules/home-iot-v1.yaml"))
     rules = select_applicable_rules(requirement("APP SUPPORTS WIFI RECOVERY"), pack)
