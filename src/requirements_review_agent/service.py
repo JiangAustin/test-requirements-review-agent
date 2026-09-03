@@ -34,7 +34,7 @@ from .models import (
     ReviewReport,
     RunStatus,
 )
-from .normalizer import normalize_requirements_with_diagnostics
+from .normalizer import detect_residual_document_noise, normalize_requirements_with_diagnostics
 from .pdf_extractor import extract_pdf
 from .providers import AnalysisProvider, build_provider
 from .reporting import render_all
@@ -102,6 +102,20 @@ class ReviewService:
         requirements = normalization.requirements
         if not requirements:
             raise _analysis_invalid("未提取到可分析的需求", stage="prepare")
+        residual_noise = detect_residual_document_noise(requirements)
+        if (
+            residual_noise.sample_size
+            and residual_noise.suspected_count / residual_noise.sample_size > 0.1
+        ):
+            raise _analysis_invalid(
+                "检测到过多残留文档噪声，请检查 PDF 提取结果",
+                stage="prepare",
+                reason="residual_document_noise",
+                sample_size=residual_noise.sample_size,
+                suspected_count=residual_noise.suspected_count,
+                reason_counts=residual_noise.reason_counts,
+                example_requirement_ids=list(residual_noise.example_requirement_ids),
+            )
 
         pack = (
             load_rule_pack(rule_path)

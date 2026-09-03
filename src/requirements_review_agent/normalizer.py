@@ -17,8 +17,9 @@ FilterReason = Literal[
 ]
 
 _PAGE_NUMBER_RE = re.compile(r"^(?:page\s+)?\d+(?:\s*(?:of|/)\s*\d+)?$", re.IGNORECASE)
+_COMBINED_PAGE_NUMBER_RE = re.compile(r"^page\s+\d+\s+of\s+\d+\S.*$", re.IGNORECASE)
 _TOC_ENTRY_RE = re.compile(r"^.+?\s*\.{2,}\s*\d+\s*$")
-_TOC_TITLE_RE = re.compile(r"^(?:table\s+of\s+contents|contents)$", re.IGNORECASE)
+_TOC_TITLE_RE = re.compile(r"^(?:table\s+of\s+contents?|contents?)$", re.IGNORECASE)
 _DOCUMENT_METADATA_RE = re.compile(
     r"^(?:(?:document\s+(?:id|number|no\.?|title)|revision|version|status|"
     r"approved\s+by|prepared\s+by|reviewed\s+by|author|owner|date)\s*[:：]\s*\S.*|"
@@ -32,6 +33,20 @@ _DOCUMENT_METADATA_RE = re.compile(
 _REQUIREMENT_MODAL_RE = re.compile(
     r"\b(?:shall|must|should|required|needs?\s+to)\b|必须|应当|应该|需要|不得",
     re.IGNORECASE,
+)
+_DOCUMENT_HISTORY_RE = re.compile(
+    r"^(?:approved\s+versions|revision\s+history|approval\s+history|"
+    r"the\s+current\s+revision\s+\S+\s+has\s+been\s+approved|"
+    r"initial\s+creation.*\brevision\b.*\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|"
+    r"version\s+version\s+comment\s+polarion\s+revision\s+approval\s+date|"
+    r".{2,80}\([^)]*\)\s*signed\s*\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+    r"(?:\s+\d{1,2}:\d{2})?)$",
+    re.IGNORECASE,
+)
+_RESIDUAL_TOC_ENTRY_RE = re.compile(r"^\d+(?:\.\d+)*\s+\S.+\s+\d+$")
+_RESIDUAL_PAGE_NUMBER_RE = re.compile(r"^page\s+\d+\s+of\s+\d+", re.IGNORECASE)
+_RESIDUAL_METADATA_TERMS = frozenset(
+    {"approval", "approved", "comment", "date", "polarion", "revision", "signed", "version"}
 )
 _METADATA_TABLE_HEADERS = frozenset(
     {
@@ -55,6 +70,17 @@ _METADATA_TABLE_HEADERS = frozenset(
 class NormalizationResult:
     requirements: tuple[AtomicRequirement, ...]
     filtered_counts: dict[FilterReason, int]
+
+
+@dataclass(frozen=True)
+class ResidualNoiseResult:
+    sample_size: int
+    reason_counts: dict[FilterReason, int]
+    example_requirement_ids: tuple[str, ...]
+
+    @property
+    def suspected_count(self) -> int:
+        return sum(self.reason_counts.values())
 
 
 def _stable_id(source: SourceRef, normalized_text: str) -> str:
@@ -122,15 +148,20 @@ def _block_filter_reason(
     table_bboxes: tuple[tuple[float, float, float, float], ...],
     repeated_margin_keys: set[tuple[str, str]],
     page_height: float | None,
+    toc_page: bool,
 ) -> FilterReason | None:
     text = " ".join(block.quote.split())
     modal = _REQUIREMENT_MODAL_RE.search(text)
     zone = _margin_zone(block.bbox[1], page_height) if block.bbox is not None else None
-    if _PAGE_NUMBER_RE.fullmatch(text) and zone is not None:
+    if (
+        _PAGE_NUMBER_RE.fullmatch(text) or _COMBINED_PAGE_NUMBER_RE.fullmatch(text)
+    ) and zone is not None:
         return "page_number"
+    if toc_page and not modal:
+        return "table_of_contents"
     if (_TOC_TITLE_RE.fullmatch(text) or _TOC_ENTRY_RE.fullmatch(text)) and not modal:
         return "table_of_contents"
-    if _DOCUMENT_METADATA_RE.match(text) and not modal:
+    if (_DOCUMENT_METADATA_RE.match(text) or _DOCUMENT_HISTORY_RE.fullmatch(text)) and not modal:
         return "document_metadata"
     if any(_overlap_ratio(block.bbox, table_bbox) >= 0.8 for table_bbox in table_bboxes):
         return "table_overlap"
@@ -164,12 +195,51 @@ def _is_metadata_table(table_cells: tuple[tuple[str | None, ...], ...], header_r
     return revision_history or approval_history
 
 
+def _residual_noise_reason(text: str) -> FilterReason | None:
+    normalized = " ".join(text.split())
+    if _REQUIREMENT_MODAL_RE.search(normalized):
+        return None
+    if _RESIDUAL_PAGE_NUMBER_RE.match(normalized):
+        return "page_number"
+    if _RESIDUAL_TOC_ENTRY_RE.fullmatch(normalized):
+        return "table_of_contents"
+    terms = set(re.findall(r"[a-z]+", normalized.casefold()))
+    if len(terms & _RESIDUAL_METADATA_TERMS) >= 3:
+        return "document_metadata"
+    return None
+
+
+def detect_residual_document_noise(
+    requirements: tuple[AtomicRequirement, ...], sample_limit: int = 50
+) -> ResidualNoiseResult:
+    sampled = requirements[:sample_limit]
+    reason_counts: Counter[FilterReason] = Counter()
+    example_ids: list[str] = []
+    for requirement in sampled:
+        reason = _residual_noise_reason(requirement.text)
+        if reason is None:
+            continue
+        reason_counts[reason] += 1
+        if len(example_ids) < 5:
+            example_ids.append(requirement.requirement_id)
+    return ResidualNoiseResult(
+        sample_size=len(sampled),
+        reason_counts=dict(sorted(reason_counts.items())),
+        example_requirement_ids=tuple(example_ids),
+    )
+
+
 def normalize_requirements_with_diagnostics(
     document: ExtractedDocument,
 ) -> NormalizationResult:
     results: list[AtomicRequirement] = []
     filtered_counts: Counter[FilterReason] = Counter()
     repeated_margin_keys = _repeated_margin_keys(document)
+    toc_pages = {
+        page.page
+        for page in document.pages
+        if any(_TOC_TITLE_RE.fullmatch(" ".join(block.quote.split())) for block in page.blocks)
+    }
 
     for page in document.pages:
         # tables first: each non-empty data row => requirement
@@ -182,6 +252,9 @@ def normalize_requirements_with_diagnostics(
                 # join non-None with ' | '
                 parts = [c for c in row if c is not None]
                 text = " | ".join(parts)
+                if page.page in toc_pages and not _REQUIREMENT_MODAL_RE.search(text):
+                    filtered_counts["table_of_contents"] += 1
+                    continue
                 if metadata_table and not _REQUIREMENT_MODAL_RE.search(text):
                     filtered_counts["document_metadata"] += 1
                     continue
@@ -218,7 +291,11 @@ def normalize_requirements_with_diagnostics(
             if not txt:
                 continue
             filter_reason = _block_filter_reason(
-                block, table_bboxes, repeated_margin_keys, page.height
+                block,
+                table_bboxes,
+                repeated_margin_keys,
+                page.height,
+                page.page in toc_pages,
             )
             if filter_reason is not None:
                 filtered_counts[filter_reason] += 1

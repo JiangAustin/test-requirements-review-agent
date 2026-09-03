@@ -68,6 +68,37 @@ def test_real_multi_page_pdf_filters_document_noise(tmp_path: Path) -> None:
     }
 
 
+def test_real_pdf_filters_singular_toc_combined_footer_and_approval_text(
+    tmp_path: Path,
+) -> None:
+    import fitz as _fitz
+
+    path = tmp_path / "actual-document-noise.pdf"
+    document = _fitz.open()
+    toc_page = document.new_page()
+    toc_page.insert_text((50, 80), "Table of Content", fontsize=12)
+    toc_page.insert_text((50, 130), "1 Introduction", fontsize=10)
+    toc_page.insert_text((500, 130), "4", fontsize=10)
+    content_page = document.new_page()
+    content_page.insert_text(
+        (20, 810),
+        "Page 2 of 94Software System Documentation - VE2026-09-03 10:40",
+        fontsize=8,
+    )
+    content_page.insert_text(
+        (50, 120), "The current Revision 5209718 has been approved", fontsize=10
+    )
+    content_page.insert_text(
+        (50, 180), "Device shall stop within 3 seconds.", fontsize=11
+    )
+    document.save(path)
+    document.close()
+
+    result = normalize_requirements(extract_pdf(path, tmp_path))
+
+    assert [item.text for item in result] == ["Device shall stop within 3 seconds."]
+
+
 def test_rejects_scanned_or_empty_page(tmp_path: Path) -> None:
     pdf = build_image_only_pdf(tmp_path / "scan.pdf")
     with pytest.raises(ReviewException, match="PDF_SCANNED"):

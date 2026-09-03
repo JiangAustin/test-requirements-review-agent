@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import pytest
+
 from requirements_review_agent.models import (
+    AtomicRequirement,
     ExtractedDocument,
     ExtractedPage,
     ExtractedTable,
     SourceRef,
 )
 from requirements_review_agent.normalizer import (
+    detect_residual_document_noise,
     normalize_requirements,
     normalize_requirements_with_diagnostics,
 )
@@ -105,6 +109,42 @@ def block(page: int, text: str, bbox: tuple[float, float, float, float]) -> Sour
     )
 
 
+def atomic_requirement(index: int, text: str) -> AtomicRequirement:
+    source = block(1, text, (40, 100 + index, 500, 110 + index))
+    return AtomicRequirement(
+        requirement_id=f"REQ-{index:012d}",
+        text=text,
+        sources=(source,),
+    )
+
+
+def test_residual_noise_diagnostics_sample_first_fifty_and_limit_examples() -> None:
+    requirements = tuple(
+        atomic_requirement(
+            index,
+            (
+                f"{index + 1} Architecture overview {index + 4}"
+                if index < 3
+                else f"Page {index + 1} of 94 footer"
+                if index < 6
+                else f"Architecture description {index}."
+                if index < 50
+                else "Version Revision Approval Date"
+            ),
+        )
+        for index in range(60)
+    )
+
+    result = detect_residual_document_noise(requirements)
+
+    assert result.sample_size == 50
+    assert result.suspected_count == 6
+    assert result.reason_counts == {"page_number": 3, "table_of_contents": 3}
+    assert result.example_requirement_ids == tuple(
+        f"REQ-{index:012d}" for index in range(5)
+    )
+
+
 def test_filters_repeated_headers_footers_page_numbers_and_toc() -> None:
     pages = tuple(
         ExtractedPage(
@@ -135,9 +175,119 @@ def test_filters_repeated_headers_footers_page_numbers_and_toc() -> None:
     }
     assert result.filtered_counts == {
         "page_number": 4,
-        "repeated_margin": 4,
-        "table_of_contents": 2,
+        "repeated_margin": 3,
+        "table_of_contents": 3,
     }
+
+
+def test_filters_all_non_modal_blocks_on_singular_toc_page() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Table of Content", (40, 80, 300, 105)),
+            block(1, "1 Introduction", (40, 130, 300, 150)),
+            block(1, "4", (500, 130, 520, 150)),
+            block(1, "2 Product overview 8", (40, 170, 520, 190)),
+            block(1, "Device shall expose a content index.", (40, 220, 500, 245)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Device shall expose a content index."
+    ]
+    assert result.filtered_counts == {"table_of_contents": 4}
+
+
+def test_filters_non_modal_table_rows_on_toc_page() -> None:
+    table = ExtractedTable(
+        page=1,
+        table_index=0,
+        bbox=(40, 120, 500, 220),
+        cells=(
+            ("Section", "Page"),
+            ("1 Introduction", "4"),
+            ("Device shall expose a content index.", "8"),
+        ),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(block(1, "Table of Content", (40, 80, 300, 105)),),
+        tables=(table,),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Device shall expose a content index. | 8"
+    ]
+    assert result.filtered_counts == {"table_of_contents": 2}
+
+
+def test_filters_combined_page_footer_only_in_margin() -> None:
+    footer = "Page 1 of 94Software System Documentation - VE2026-09-03 10:40"
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, footer, (40, 810, 520, 830)),
+            block(1, footer, (40, 300, 520, 320)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [footer]
+    assert result.filtered_counts == {"page_number": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The current Revision 5209718 has been approved",
+        "Cioflica Paul (VE)Signed2026-09-02 15:53",
+        "Initial creation revision 5209718 2026-09-02",
+        "Version Version Comment Polarion Revision Approval Date",
+        "Approved Versions",
+        "Revision History",
+        "Approval History",
+    ],
+)
+def test_filters_unstructured_approval_and_revision_metadata(text: str) -> None:
+    result = normalize_requirements_with_diagnostics(extracted_document_with(text))
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"document_metadata": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The software shall report the approved configuration version.",
+        "The device must enter the signed firmware update state.",
+    ],
+)
+def test_keeps_approval_language_when_text_is_a_requirement(text: str) -> None:
+    result = normalize_requirements_with_diagnostics(extracted_document_with(text))
+
+    assert [item.text for item in result.requirements] == [text]
+    assert result.filtered_counts == {}
 
 
 def test_filters_document_approval_metadata_but_keeps_real_requirement() -> None:

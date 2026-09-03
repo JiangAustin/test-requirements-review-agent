@@ -52,6 +52,25 @@ def build_pdf_with_metadata(path: Path) -> Path:
     return path
 
 
+def build_pdf_with_residual_noise(path: Path, requirement_count: int = 5) -> Path:
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text(
+        (50, 60),
+        "1 Introduction and system architecture overview details 4",
+        fontsize=10,
+    )
+    for index in range(requirement_count):
+        page.insert_text(
+            (50, 120 + index * 50),
+            f"Device shall expose diagnostic state {index} within 3 seconds.",
+            fontsize=10,
+        )
+    document.save(path)
+    document.close()
+    return path
+
+
 def build_multi_page_pdf(path: Path) -> Path:
     document = fitz.open()
     for text in (
@@ -80,6 +99,31 @@ def test_prepare_reports_normalization_filter_counts(tmp_path: Path) -> None:
     assert prepared.requirement_count == 1
     assert "normalization:candidates=2;kept=1;filtered=1" in prepared.warnings
     assert "normalization:filtered:document_metadata=1" in prepared.warnings
+
+
+def test_prepare_rejects_residual_document_noise_above_ten_percent(tmp_path: Path) -> None:
+    pdf = build_pdf_with_residual_noise(tmp_path / "requirements.pdf")
+
+    with pytest.raises(ReviewException, match=ANALYSIS_INVALID) as exc_info:
+        ReviewService(tmp_path).prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+
+    assert exc_info.value.error.details["reason"] == "residual_document_noise"
+    assert exc_info.value.error.details["sample_size"] == 6
+    assert exc_info.value.error.details["suspected_count"] == 1
+    assert exc_info.value.error.details["reason_counts"] == {"table_of_contents": 1}
+    example_ids = exc_info.value.error.details["example_requirement_ids"]
+    assert isinstance(example_ids, list)
+    assert len(example_ids) == 1
+    assert example_ids[0].startswith("REQ-")
+    assert list((tmp_path / ".runs").iterdir()) == []
+
+
+def test_prepare_allows_residual_noise_at_exactly_ten_percent(tmp_path: Path) -> None:
+    pdf = build_pdf_with_residual_noise(tmp_path / "requirements.pdf", requirement_count=9)
+
+    prepared = ReviewService(tmp_path).prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+
+    assert prepared.requirement_count == 10
 
 
 def test_prepare_prefers_workspace_rule_pack_over_bundled(tmp_path: Path) -> None:

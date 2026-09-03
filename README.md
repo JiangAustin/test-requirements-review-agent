@@ -139,6 +139,7 @@ $env:RRA_LOCAL_MODEL = Read-Host "Local model"
 
 - normalizer 会过滤高置信 document noise，包括 page numbers、table of contents entries、重复页眉/页脚、document approval/revision metadata，以及与 extracted table 重叠的 text blocks。
 - `prepare_review.warnings` 会报告 candidates、kept、filtered 总数，并按 filter reason 提供计数，便于识别异常候选量。
+- normalization 后会抽查前 50 条 candidates；疑似目录、审批或组合页码超过 10% 时，`prepare_review` 返回 `ANALYSIS_INVALID`，details 包含 `reason=residual_document_noise`、分类计数和示例 requirement IDs，不创建 run。
 - 已创建 run 的 extracted/requirements stages 不会追溯重算。升级后必须对原 PDF 重新执行 `prepare_review` 并使用新的 `run_id`；旧 run（例如 `20260903T094002Z-82618e17`）仍保留原候选集。
 
 ## 无 OCR 的处理方式
