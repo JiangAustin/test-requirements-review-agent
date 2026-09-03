@@ -21,7 +21,11 @@ def get_service() -> ReviewService:
 
 
 @mcp.tool(name="prepare_review", structured_output=True)
-def prepare_review(pdf_path: str, rule_pack: str, model_mode: ProviderMode) -> dict[str, object]:
+def prepare_review(
+    pdf_path: str,
+    rule_pack: str = "home-iot-v1",
+    model_mode: ProviderMode = ProviderMode.COPILOT,
+) -> dict[str, object]:
     prepared = get_service().prepare(Path(pdf_path), rule_pack, model_mode)
     return prepared.model_dump(mode="json")
 

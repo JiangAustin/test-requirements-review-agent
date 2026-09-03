@@ -22,11 +22,16 @@ uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git
 
 - `.github/agents/requirements-review.agent.md`
 - `.vscode/mcp.json`
-- `.gitignore` 中的 `.runs/`、`.env`、`inputs/`
+- `requirements/` 需求收件箱
+- `.gitignore` 中的 `.runs/`、`.env`、`inputs/` 和需求文件保护规则
 
 它不会覆盖已有的不同 Agent 文件或同名 MCP server 配置；发生冲突时会停止并说明路径。默认 `home-iot-v1` rule pack 已内置，不需要复制 `rules/` 目录。
 
 初始化后在 VS Code 执行 Reload Window，打开 Copilot Chat 并选择 **Requirements Review**。首次启动 MCP 时需要网络访问 GitHub，并在 VS Code 中确认 workspace trust 与 MCP start/trust。
+
+将 PDF 上传到项目的 `requirements/` 目录，再从该目录附加到 Copilot Chat。Agent 会直接读取 attachment metadata 中的 workspace-local 路径；如果附件不在 `requirements/`，Agent 会要求先上传到该目录。目录中的实际需求文件默认 ignored，仅 `.gitkeep` 可提交，避免误把需求文档加入版本库。
+
+`prepare_review` 默认使用内置 rule pack `home-iot-v1` 和 model mode `copilot`。日常使用只需提供或附加 PDF；需要 `company_api`、`local` 或其他 rule pack 时再显式指定。
 
 可选健康检查：
 
@@ -34,7 +39,7 @@ uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git
 uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git rra doctor
 ```
 
-`doctor` 检查 `uvx`、Agent、MCP 配置和内置 rule pack；全部正常时退出码为 0。
+`doctor` 检查 `uvx`、Agent、MCP 配置、受保护的 `requirements/` 收件箱和内置 rule pack；全部正常时退出码为 0。
 
 ## Rule pack 覆盖
 
@@ -73,13 +78,12 @@ Requirements Review Agent 只应驱动这六个工具：prepare_review、get_ana
 
 demo usage：
 
-1. 提供一个 workspace-local PDF path。
-2. 选择 rule pack，例如 home-iot-v1。
-3. 选择 provider mode：copilot、company_api 或 local。
-4. 确认 provider 和 data destination。
-5. 执行 prepare_review。
-6. Copilot 模式逐批调用 get_analysis_batch 和 submit_analysis；company_api/local 模式调用 run_provider_analysis。
-7. 执行 finalize_review 与 get_review_status，并从 `.runs/<run-id>/reports/` 打开 JSON、Markdown、DOCX。
+1. 将 PDF 上传到 `requirements/`，并在 Chat 中附加该文件。
+2. 默认直接使用 `home-iot-v1` 与 `copilot`；如需其他配置再显式指定。
+3. 确认 provider 和 data destination。
+4. 执行 prepare_review。
+5. Copilot 模式逐批调用 get_analysis_batch 和 submit_analysis；company_api/local 模式调用 run_provider_analysis。
+6. 执行 finalize_review 与 get_review_status，并从 `.runs/<run-id>/reports/` 打开 JSON、Markdown、DOCX。
 
 ## Provider 模式、环境变量与安全
 
@@ -109,7 +113,7 @@ $env:RRA_LOCAL_MODEL = Read-Host "Local model"
 
 - .runs/ 用于保存本地运行中间结果和最终报告。
 - .env 用于本地环境变量，保持 ignored。
-- input PDFs 必须保持 local+ignored，避免把真实需求文档加入版本库。
+- `requirements/` 内的 input PDFs 必须保持 local+ignored，避免把真实需求文档加入版本库。
 - secrets never 出现在 committed config、日志或报告。
 
 ## 输出格式与指标解释

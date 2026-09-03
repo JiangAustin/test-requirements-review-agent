@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 import sys
+import tomllib
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
@@ -27,7 +28,13 @@ DEVELOPMENT_MCP_SERVER = {
     "command": "uv",
     "args": ["run", "requirements-review-mcp"],
 }
-IGNORE_ENTRIES = (".runs/", ".env", "inputs/")
+IGNORE_ENTRIES = (
+    ".runs/",
+    ".env",
+    "inputs/",
+    "requirements/*",
+    "!requirements/.gitkeep",
+)
 
 
 def _resource_text(*parts: str) -> str:
@@ -48,11 +55,39 @@ def _read_mcp_config(path: Path) -> dict[str, Any]:
     return config
 
 
+def _is_development_workspace(workspace: Path) -> bool:
+    try:
+        project_file = tomllib.loads((workspace / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    project = project_file.get("project")
+    if not isinstance(project, dict) or project.get("name") != "requirements-review-agent":
+        return False
+    scripts = project.get("scripts")
+    return isinstance(scripts, dict) and scripts.get(
+        "requirements-review-mcp"
+    ) == "requirements_review_agent.server:main"
+
+
+def _is_inbox_protected(workspace: Path) -> bool:
+    requirements_path = workspace / "requirements"
+    try:
+        ignore_entries = set((workspace / ".gitignore").read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return False
+    return (
+        requirements_path.is_dir()
+        and (requirements_path / ".gitkeep").is_file()
+        and {"requirements/*", "!requirements/.gitkeep"} <= ignore_entries
+    )
+
+
 def _init(workspace: Path) -> int:
     workspace = workspace.resolve()
     agent_path = workspace / ".github" / "agents" / "requirements-review.agent.md"
     mcp_path = workspace / ".vscode" / "mcp.json"
     gitignore_path = workspace / ".gitignore"
+    requirements_keep = workspace / "requirements" / ".gitkeep"
     agent_text = _resource_text("requirements-review.agent.md")
     config = _read_mcp_config(mcp_path)
 
@@ -64,6 +99,8 @@ def _init(workspace: Path) -> int:
 
     agent_path.parent.mkdir(parents=True, exist_ok=True)
     agent_path.write_text(agent_text, encoding="utf-8", newline="\n")
+    requirements_keep.parent.mkdir(parents=True, exist_ok=True)
+    requirements_keep.touch(exist_ok=True)
     config["servers"][SERVER_NAME] = MCP_SERVER
     mcp_path.parent.mkdir(parents=True, exist_ok=True)
     mcp_path.write_text(
@@ -80,6 +117,7 @@ def _init(workspace: Path) -> int:
             stream.write(prefix + "\n".join(missing_ignores) + "\n")
 
     print(f"Requirements Review 已初始化：{workspace}")
+    print(f"请将需求 PDF 上传到：{requirements_keep.parent}")
     print("请在 VS Code 中 Reload Window，然后选择 Requirements Review Agent。")
     return 0
 
@@ -101,10 +139,14 @@ def _doctor(workspace: Path) -> int:
     try:
         config = _read_mcp_config(mcp_path)
         configured_server = config["servers"].get(SERVER_NAME)
-        mcp_ok = configured_server in (MCP_SERVER, DEVELOPMENT_MCP_SERVER)
+        mcp_ok = configured_server == MCP_SERVER or (
+            configured_server == DEVELOPMENT_MCP_SERVER
+            and _is_development_workspace(workspace)
+        )
     except SystemExit:
         mcp_ok = False
     checks.append(("MCP", mcp_ok))
+    checks.append(("Requirements inbox", _is_inbox_protected(workspace)))
     try:
         load_bundled_rule_pack("home-iot-v1")
         rules_ok = True

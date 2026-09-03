@@ -229,7 +229,8 @@ def test_workspace_agent_and_portable_config_contracts_exist() -> None:
     }
 
     ordered_steps = [
-        "1. 询问工作区内的 PDF 路径、rule pack 和模式",
+        "1. 从 Chat attachment metadata 读取 `requirements/` 下的 PDF 路径；"
+        "没有附件时询问该目录内的 PDF 路径",
         "2. 说明 provider 和数据去向，并在非 Copilot 外部传输前取得明确确认",
         "3. 调用 prepare_review，并在 unsupported/scanned/encrypted PDF 时停止",
         "4. Copilot 模式下对每个 batch 调用 get_analysis_batch、"
@@ -243,6 +244,9 @@ def test_workspace_agent_and_portable_config_contracts_exist() -> None:
         current_index = body.index(step)
         assert current_index > last_index
         last_index = current_index
+
+    assert "rule pack 默认 `home-iot-v1`" in body
+    assert "model mode 默认 `copilot`" in body
     assert "需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率" in body
     assert "建议场景覆盖度不是现有用例覆盖率，也不是测试执行覆盖率" in body
     assert "company_api" in body and "显式确认 external transfer" in body
