@@ -29,6 +29,7 @@ from .models import (
     PreparedReview,
     ProviderMode,
     ReportArtifacts,
+    RequirementAnalysis,
     RequirementReview,
     ReviewReport,
     RunStatus,
@@ -42,6 +43,7 @@ from .scoring import aggregate_scores, score_requirements
 from .storage import RunStore
 
 SCHEMA_VERSION = ANALYSIS_SCHEMA_VERSION
+DEFAULT_ANALYSIS_BATCH_SIZE = 50
 _SERVICE_STAGES = {"prepared", "analyzed", "finalized", "partial", "failed"}
 
 
@@ -82,12 +84,16 @@ class ReviewService:
         *,
         rules_root: Path | None = None,
         provider_factory: Callable[[ProviderMode], AnalysisProvider | None] | None = None,
+        analysis_batch_size: int = DEFAULT_ANALYSIS_BATCH_SIZE,
     ) -> None:
+        if analysis_batch_size < 1:
+            raise ValueError("analysis_batch_size must be positive")
         self.workspace = workspace
         self._workspace = workspace.resolve()
         self._rules_root = (rules_root or (workspace / "rules")).resolve()
         self._store = RunStore(self._workspace)
         self._provider_factory = provider_factory or self._default_provider_factory
+        self._analysis_batch_size = analysis_batch_size
 
     def prepare(self, pdf: Path, rule_pack: str, mode: ProviderMode) -> PreparedReview:
         rule_path = self._resolve_rule_pack(rule_pack)
@@ -125,6 +131,9 @@ class ReviewService:
         warnings = tuple(warning_items)
         data_destination = self._data_destination(mode)
         model_name = self._model_name_for_mode(mode)
+        batch_count = (
+            len(requirements) + self._analysis_batch_size - 1
+        ) // self._analysis_batch_size
         manifest = self._store.create_run(
             pdf_hash=extracted.sha256,
             rule_version=pack.version,
@@ -140,7 +149,9 @@ class ReviewService:
             "warnings": list(warnings),
             "requirement_count": len(requirements),
             "analyzed_count": 0,
-            "batch_count": 1,
+            "batch_count": batch_count,
+            "analysis_batch_size": self._analysis_batch_size,
+            "submitted_batch_indices": [],
             "artifacts": None,
             "rule_version": pack.version,
         }
@@ -167,7 +178,7 @@ class ReviewService:
             data_destination=data_destination,
             requirement_count=len(requirements),
             warnings=warnings,
-            batch_count=1,
+            batch_count=batch_count,
         )
 
     def get_batch(self, run_id: str, batch_index: int) -> AnalysisBatch:
@@ -178,7 +189,8 @@ class ReviewService:
                 run_id=run_id,
                 stage=state["stage"],
             )
-        if batch_index != 0:
+        batch_count = self._state_batch_count(state)
+        if batch_index < 0 or batch_index >= batch_count:
             raise _analysis_invalid(
                 "批次索引越界",
                 run_id=run_id,
@@ -187,7 +199,12 @@ class ReviewService:
             )
         requirements = self._load_requirements(run_id)
         applicable = self._load_applicable(run_id)
-        return build_analysis_batch(run_id, batch_index, requirements, applicable)
+        batch_requirements = self._requirements_for_batch(state, requirements, batch_index)
+        batch_applicable = {
+            requirement.requirement_id: applicable[requirement.requirement_id]
+            for requirement in batch_requirements
+        }
+        return build_analysis_batch(run_id, batch_index, batch_requirements, batch_applicable)
 
     def submit(
         self, run_id: str, submission: AnalysisSubmission | dict[str, object]
@@ -207,17 +224,38 @@ class ReviewService:
                 stage=state["stage"],
             )
 
+        parsed = self._parse_submission(submission)
         requirements = self._load_requirements(run_id)
         applicable = self._load_applicable(run_id)
-        analyses = validate_submission(submission, requirements, applicable)
-        parsed = (
-            submission
-            if isinstance(submission, AnalysisSubmission)
-            else AnalysisSubmission.model_validate(submission)
+        batch_index = self._submission_batch_index(state, requirements, parsed)
+        submitted_indices = self._submitted_batch_indices(state)
+        if batch_index in submitted_indices:
+            raise _analysis_invalid(
+                "分析批次已提交",
+                run_id=run_id,
+                stage=state["stage"],
+                index=batch_index,
+            )
+
+        batch_requirements = self._requirements_for_batch(state, requirements, batch_index)
+        batch_applicable = {
+            requirement.requirement_id: applicable[requirement.requirement_id]
+            for requirement in batch_requirements
+        }
+        analyses = validate_submission(parsed, batch_requirements, batch_applicable)
+        self._store.write_stage(
+            run_id,
+            self._batch_submission_stage(batch_index),
+            parsed.model_dump(mode="json"),
         )
-        self._store.write_stage(run_id, "submission", parsed.model_dump(mode="json"))
-        state["stage"] = "analyzed"
-        state["analyzed_count"] = len(analyses)
+        submitted_indices.add(batch_index)
+        state["submitted_batch_indices"] = sorted(submitted_indices)
+        state["analyzed_count"] = int(state.get("analyzed_count", 0)) + len(analyses)
+        if len(submitted_indices) == self._state_batch_count(state):
+            merged = self._merge_batch_submissions(run_id, state)
+            validate_submission(merged, requirements, applicable)
+            self._store.write_stage(run_id, "submission", merged.model_dump(mode="json"))
+            state["stage"] = "analyzed"
         self._store.write_stage(run_id, "service", state)
         return self._status_from_state(run_id, state)
 
@@ -242,16 +280,34 @@ class ReviewService:
             raise _provider_unavailable("Provider 不可用", run_id=run_id, stage=state["stage"])
 
         try:
-            batch = self.get_batch(run_id, 0)
-            submission = await provider.analyze(batch)
-            analyses = validate_submission(
-                submission,
-                self._load_requirements(run_id),
-                self._load_applicable(run_id),
-            )
-            self._store.write_stage(run_id, "submission", submission.model_dump(mode="json"))
+            requirements = self._load_requirements(run_id)
+            applicable = self._load_applicable(run_id)
+            submitted_indices = self._submitted_batch_indices(state)
+            for batch_index in range(self._state_batch_count(state)):
+                if batch_index in submitted_indices:
+                    continue
+                batch = self.get_batch(run_id, batch_index)
+                submission = await provider.analyze(batch)
+                analyses = validate_submission(
+                    submission, batch.requirements, batch.applicable
+                )
+                self._store.write_stage(
+                    run_id,
+                    self._batch_submission_stage(batch_index),
+                    submission.model_dump(mode="json"),
+                )
+                submitted_indices.add(batch_index)
+                state["submitted_batch_indices"] = sorted(submitted_indices)
+                state["analyzed_count"] = int(state.get("analyzed_count", 0)) + len(
+                    analyses
+                )
+                self._store.write_stage(run_id, "service", state)
+
+            merged = self._merge_batch_submissions(run_id, state)
+            validate_submission(merged, requirements, applicable)
+            self._store.write_stage(run_id, "submission", merged.model_dump(mode="json"))
             state["stage"] = "analyzed"
-            state["analyzed_count"] = len(analyses)
+            state["analyzed_count"] = len(requirements)
             self._store.write_stage(run_id, "service", state)
             return self._status_from_state(run_id, state)
         finally:
@@ -370,6 +426,94 @@ class ReviewService:
                 "分析结果不存在或已损坏",
                 run_id=run_id,
             ) from exc
+
+    def _parse_submission(
+        self, submission: AnalysisSubmission | dict[str, object]
+    ) -> AnalysisSubmission:
+        if isinstance(submission, AnalysisSubmission):
+            return submission
+        try:
+            return AnalysisSubmission.model_validate(submission)
+        except ValidationError as exc:
+            first_error = exc.errors(include_url=False)[0]
+            raise _analysis_invalid(
+                "分析结果结构无效",
+                location=".".join(str(part) for part in first_error.get("loc", ())),
+                error=str(first_error.get("msg", "validation error"))[:200],
+            ) from exc
+
+    def _state_batch_count(self, state: dict[str, Any]) -> int:
+        batch_count = state.get("batch_count", 1)
+        if not isinstance(batch_count, int) or isinstance(batch_count, bool) or batch_count < 1:
+            raise _analysis_invalid("运行批次状态无效")
+        return batch_count
+
+    def _state_batch_size(self, state: dict[str, Any]) -> int:
+        batch_size = state.get("analysis_batch_size", state.get("requirement_count", 0))
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size < 1:
+            raise _analysis_invalid("运行批次状态无效")
+        return batch_size
+
+    def _requirements_for_batch(
+        self,
+        state: dict[str, Any],
+        requirements: tuple[AtomicRequirement, ...],
+        batch_index: int,
+    ) -> tuple[AtomicRequirement, ...]:
+        batch_size = self._state_batch_size(state)
+        start = batch_index * batch_size
+        return requirements[start : start + batch_size]
+
+    def _submitted_batch_indices(self, state: dict[str, Any]) -> set[int]:
+        raw_indices = state.get("submitted_batch_indices", [])
+        if not isinstance(raw_indices, list) or any(
+            not isinstance(index, int) or isinstance(index, bool) for index in raw_indices
+        ):
+            raise _analysis_invalid("运行批次状态无效")
+        indices = set(raw_indices)
+        if len(indices) != len(raw_indices) or any(
+            index < 0 or index >= self._state_batch_count(state) for index in indices
+        ):
+            raise _analysis_invalid("运行批次状态无效")
+        return indices
+
+    def _submission_batch_index(
+        self,
+        state: dict[str, Any],
+        requirements: tuple[AtomicRequirement, ...],
+        submission: AnalysisSubmission,
+    ) -> int:
+        submitted_ids = {analysis.requirement_id for analysis in submission.requirements}
+        for batch_index in range(self._state_batch_count(state)):
+            batch_requirements = self._requirements_for_batch(state, requirements, batch_index)
+            expected_ids = {
+                requirement.requirement_id for requirement in batch_requirements
+            }
+            if submitted_ids == expected_ids:
+                return batch_index
+        raise _analysis_invalid("提交内容不匹配任何分析批次")
+
+    def _batch_submission_stage(self, batch_index: int) -> str:
+        return f"submission_{batch_index:06d}"
+
+    def _merge_batch_submissions(
+        self, run_id: str, state: dict[str, Any]
+    ) -> AnalysisSubmission:
+        analyses: list[RequirementAnalysis] = []
+        for batch_index in range(self._state_batch_count(state)):
+            try:
+                payload = self._store.read_stage(
+                    run_id, self._batch_submission_stage(batch_index)
+                )
+                batch_submission = AnalysisSubmission.model_validate(payload)
+            except (FileNotFoundError, OSError, ValueError, TypeError, ValidationError) as exc:
+                raise _analysis_invalid(
+                    "分析批次结果不存在或已损坏",
+                    run_id=run_id,
+                    index=batch_index,
+                ) from exc
+            analyses.extend(batch_submission.requirements)
+        return AnalysisSubmission(schema_version=SCHEMA_VERSION, requirements=tuple(analyses))
 
     def _load_failures(self, run_id: str) -> tuple[ReviewError, ...]:
         failures_path = self._store.run_path(run_id) / "failures.json"

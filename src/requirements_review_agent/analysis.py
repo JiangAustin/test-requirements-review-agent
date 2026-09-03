@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -18,7 +18,7 @@ from .models import (
 )
 
 QUESTION_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-ANALYSIS_SCHEMA_VERSION = "1.0"
+ANALYSIS_SCHEMA_VERSION: Literal["1.0"] = "1.0"
 
 
 class AnalysisBatch(BaseModel):

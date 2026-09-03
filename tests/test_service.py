@@ -52,6 +52,19 @@ def build_pdf_with_metadata(path: Path) -> Path:
     return path
 
 
+def build_multi_page_pdf(path: Path) -> Path:
+    document = fitz.open()
+    for text in (
+        "Device shall enter Wi-Fi pairing within 30 seconds.",
+        "Device shall recover a BLE connection within 5 seconds.",
+    ):
+        page = document.new_page()
+        page.insert_text((50, 80), text, fontsize=12)
+    document.save(path)
+    document.close()
+    return path
+
+
 def test_prepare_uses_bundled_rule_pack_when_workspace_has_no_rules(tmp_path: Path) -> None:
     pdf = build_pdf(tmp_path / "requirements.pdf")
 
@@ -161,6 +174,22 @@ class FakeProvider(AnalysisProvider):
         self.closed = True
 
 
+class BatchProvider(AnalysisProvider):
+    def __init__(self, *, fail_batch_index: int | None = None) -> None:
+        self.fail_batch_index = fail_batch_index
+        self.called_batches: list[AnalysisBatch] = []
+        self.closed = False
+
+    async def analyze(self, batch: AnalysisBatch) -> AnalysisSubmission:
+        self.called_batches.append(batch)
+        if batch.batch_index == self.fail_batch_index:
+            raise RuntimeError("provider interrupted")
+        return valid_submission_for(batch)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     (tmp_path / "rules").mkdir()
@@ -216,6 +245,34 @@ def test_copilot_prepare_batch_submit_finalize_status_roundtrip(
     assert status.analyzed_count == prepared.requirement_count
     assert status.artifacts is not None
     assert status.artifacts.json.exists()
+
+
+def test_copilot_processes_large_reviews_in_multiple_batches(
+    workspace: Path,
+) -> None:
+    pdf = build_multi_page_pdf(workspace / "multi-page.pdf")
+    service = ReviewService(workspace, analysis_batch_size=1)
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+
+    assert prepared.requirement_count > 1
+    assert prepared.batch_count == prepared.requirement_count
+
+    batches = [
+        service.get_batch(prepared.run_id, batch_index)
+        for batch_index in range(prepared.batch_count)
+    ]
+    assert all(len(batch.requirements) == 1 for batch in batches)
+
+    partial = service.submit(prepared.run_id, valid_submission_for(batches[0]))
+    assert partial.stage == "prepared"
+    assert partial.analyzed_count == 1
+
+    for batch in batches[1:]:
+        status = service.submit(prepared.run_id, valid_submission_for(batch))
+
+    assert status.stage == "analyzed"
+    assert status.analyzed_count == prepared.requirement_count
+    assert service.finalize(prepared.run_id).status == "complete"
 
 
 def test_new_service_instance_can_resume_status_batch_and_finalize(
@@ -335,6 +392,34 @@ async def test_local_provider_run_persists_analysis_and_closes_provider(
     assert status.analyzed_count == prepared.requirement_count
     assert fake_provider.called_batches
     assert fake_provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_local_provider_resumes_after_a_later_batch_fails(workspace: Path) -> None:
+    pdf = build_multi_page_pdf(workspace / "multi-page.pdf")
+    failing_provider = BatchProvider(fail_batch_index=1)
+    service = ReviewService(
+        workspace,
+        analysis_batch_size=1,
+        provider_factory=lambda _: failing_provider,
+    )
+    prepared = service.prepare(pdf, "home-iot-v1", ProviderMode.LOCAL)
+
+    with pytest.raises(RuntimeError, match="provider interrupted"):
+        await service.run_provider(prepared.run_id)
+
+    partial = service.status(prepared.run_id)
+    assert partial.stage == "prepared"
+    assert partial.analyzed_count == 1
+
+    resumed_provider = BatchProvider()
+    resumed = ReviewService(workspace, provider_factory=lambda _: resumed_provider)
+    status = await resumed.run_provider(prepared.run_id)
+
+    assert [batch.batch_index for batch in resumed_provider.called_batches] == [1]
+    assert status.stage == "analyzed"
+    assert status.analyzed_count == prepared.requirement_count
+    assert resumed_provider.closed is True
 
 
 @pytest.mark.asyncio
