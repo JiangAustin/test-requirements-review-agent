@@ -67,6 +67,7 @@ class ExtractedPage(BaseModel):
     text: str
     blocks: tuple[SourceRef, ...]
     tables: tuple[ExtractedTable, ...]
+    height: float | None = Field(default=None, gt=0)
 
 
 class ExtractedDocument(BaseModel):
