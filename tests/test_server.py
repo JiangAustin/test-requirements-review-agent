@@ -173,6 +173,33 @@ async def test_server_tools_have_nonempty_schemas_and_forward_structured_results
 
 
 @pytest.mark.asyncio
+async def test_prepare_review_defaults_to_bundled_rules_and_copilot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubService()
+    monkeypatch.setattr("requirements_review_agent.server.get_service", lambda: stub)
+
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        prepared = await client.call_tool(
+            "prepare_review",
+            {"pdf_path": str(Path("requirements") / "input.pdf")},
+        )
+
+    properties = tools["prepare_review"].input_schema["properties"]
+    assert properties["rule_pack"]["default"] == "home-iot-v1"
+    assert properties["model_mode"]["default"] == "copilot"
+    assert prepared.structured_content["provider_mode"] == "copilot"
+    assert stub.calls == [
+        (
+            "prepare",
+            (Path("requirements") / "input.pdf", "home-iot-v1", ProviderMode.COPILOT),
+            {},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_tool_exposes_exact_analysis_submission_schema() -> None:
     async with Client(mcp) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}

@@ -24,9 +24,10 @@ def test_init_creates_portable_workspace_configuration(tmp_path: Path) -> None:
             "requirements-review-mcp",
         ],
     }
-    assert {".runs/", ".env", "inputs/"} <= set(
+    assert {".runs/", ".env", "inputs/", "requirements/*", "!requirements/.gitkeep"} <= set(
         (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
     )
+    assert (tmp_path / "requirements" / ".gitkeep").is_file()
 
 
 def test_init_is_idempotent_and_preserves_other_mcp_servers(tmp_path: Path) -> None:
@@ -96,6 +97,7 @@ def test_doctor_passes_after_init(tmp_path: Path, capsys: pytest.CaptureFixture[
     output = capsys.readouterr().out
     assert "Agent: OK" in output
     assert "MCP: OK" in output
+    assert "Requirements inbox: OK" in output
     assert "Built-in rule pack: OK" in output
 
 
@@ -110,6 +112,16 @@ def test_init_treats_crlf_agent_as_identical(tmp_path: Path) -> None:
 
 def test_doctor_accepts_repository_development_mcp_config(tmp_path: Path) -> None:
     assert main(["init", "--workspace", str(tmp_path)]) == 0
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "requirements-review-agent"
+
+[project.scripts]
+requirements-review-mcp = "requirements_review_agent.server:main"
+""".strip(),
+        encoding="utf-8",
+    )
     config_path = tmp_path / ".vscode" / "mcp.json"
     config_path.write_text(
         json.dumps(
@@ -129,6 +141,27 @@ def test_doctor_accepts_repository_development_mcp_config(tmp_path: Path) -> Non
     assert main(["doctor", "--workspace", str(tmp_path)]) == 0
 
 
+def test_doctor_rejects_development_mcp_config_outside_repository(tmp_path: Path) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    config_path = tmp_path / ".vscode" / "mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "servers": {
+                    "requirements-review": {
+                        "type": "stdio",
+                        "command": "uv",
+                        "args": ["run", "requirements-review-mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--workspace", str(tmp_path)]) == 1
+
+
 def test_doctor_returns_failure_for_uninitialized_workspace(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -136,3 +169,25 @@ def test_doctor_returns_failure_for_uninitialized_workspace(
     output = capsys.readouterr().out
     assert "Agent: FAIL" in output
     assert "MCP: FAIL" in output
+
+
+def test_doctor_returns_failure_when_requirements_inbox_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    (tmp_path / "requirements" / ".gitkeep").unlink()
+    (tmp_path / "requirements").rmdir()
+
+    assert main(["doctor", "--workspace", str(tmp_path)]) == 1
+    assert "Requirements inbox: FAIL" in capsys.readouterr().out
+
+
+def test_doctor_returns_failure_when_inbox_protection_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["init", "--workspace", str(tmp_path)]) == 0
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text(".runs/\n.env\n", encoding="utf-8")
+
+    assert main(["doctor", "--workspace", str(tmp_path)]) == 1
+    assert "Requirements inbox: FAIL" in capsys.readouterr().out
