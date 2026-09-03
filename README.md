@@ -22,10 +22,11 @@ uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git
 
 - `.github/agents/requirements-review.agent.md`
 - `.vscode/mcp.json`
+- `.vscode/requirements-review-state.json`
 - `requirements/` 需求收件箱
 - `.gitignore` 中的 `.runs/`、`.env`、`inputs/` 和需求文件保护规则
 
-它不会覆盖已有的不同 Agent 文件或同名 MCP server 配置；发生冲突时会停止并说明路径。默认 `home-iot-v1` rule pack 已内置，不需要复制 `rules/` 目录。
+首次安装会在 `.vscode/requirements-review-state.json` 记录官方 Agent 模板 hash。以后仍运行同一条命令：未修改的官方 Agent 会自动升级；检测到用户修改时会停止并保留文件。无状态的已知旧版官方 Agent 会自动迁移，未知 Agent 内容或不同的同名 MCP server 配置不会被覆盖。默认 `home-iot-v1` rule pack 已内置，不需要复制 `rules/` 目录。
 
 初始化后在 VS Code 执行 Reload Window，打开 Copilot Chat 并选择 **Requirements Review**。首次启动 MCP 时需要网络访问 GitHub，并在 VS Code 中确认 workspace trust 与 MCP start/trust。
 
