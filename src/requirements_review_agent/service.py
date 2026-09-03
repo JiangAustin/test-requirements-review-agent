@@ -33,7 +33,7 @@ from .models import (
     ReviewReport,
     RunStatus,
 )
-from .normalizer import normalize_requirements
+from .normalizer import normalize_requirements_with_diagnostics
 from .pdf_extractor import extract_pdf
 from .providers import AnalysisProvider, build_provider
 from .reporting import render_all
@@ -92,7 +92,8 @@ class ReviewService:
     def prepare(self, pdf: Path, rule_pack: str, mode: ProviderMode) -> PreparedReview:
         rule_path = self._resolve_rule_pack(rule_pack)
         extracted = extract_pdf(pdf, self._workspace)
-        requirements = normalize_requirements(extracted)
+        normalization = normalize_requirements_with_diagnostics(extracted)
+        requirements = normalization.requirements
         if not requirements:
             raise _analysis_invalid("未提取到可分析的需求", stage="prepare")
 
@@ -105,11 +106,23 @@ class ReviewService:
             requirement.requirement_id: select_applicable_rules(requirement, pack)
             for requirement in requirements
         }
-        warnings = tuple(
+        warning_items = [
             requirement.requirement_id
             for requirement in requirements
             if requirement.needs_manual_review
-        )
+        ]
+        filtered_count = sum(normalization.filtered_counts.values())
+        if filtered_count:
+            warning_items.append(
+                "normalization:"
+                f"candidates={len(requirements) + filtered_count};"
+                f"kept={len(requirements)};filtered={filtered_count}"
+            )
+            warning_items.extend(
+                f"normalization:filtered:{reason}={count}"
+                for reason, count in normalization.filtered_counts.items()
+            )
+        warnings = tuple(warning_items)
         data_destination = self._data_destination(mode)
         model_name = self._model_name_for_mode(mode)
         manifest = self._store.create_run(

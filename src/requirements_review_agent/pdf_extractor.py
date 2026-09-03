@@ -135,6 +135,7 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                         text=page_text,
                         blocks=tuple(blocks),
                         tables=tuple(tables),
+                        height=float(page.rect.height),
                     )
                 )
 

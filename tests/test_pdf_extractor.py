@@ -37,6 +37,37 @@ def test_extracts_text_table_and_one_based_sources(tmp_path: Path) -> None:
     assert len(result.sha256) == 64
 
 
+def test_real_multi_page_pdf_filters_document_noise(tmp_path: Path) -> None:
+    import fitz as _fitz
+
+    path = tmp_path / "document-noise.pdf"
+    document = _fitz.open()
+    for page_number in range(1, 5):
+        page = document.new_page()
+        page.insert_text((50, 30), "Product Requirements Specification", fontsize=9)
+        page.insert_text((290, 790), str(page_number), fontsize=9)
+        if page_number == 1:
+            page.insert_text((50, 100), "Table of Contents", fontsize=12)
+            page.insert_text((50, 135), "1. Safety requirements ........ 3", fontsize=10)
+            page.insert_text((50, 180), "Approved by: Jane Doe", fontsize=10)
+        else:
+            page.insert_text(
+                (50, 180),
+                f"Device shall stop within {page_number} seconds.",
+                fontsize=11,
+            )
+    document.save(path)
+    document.close()
+
+    result = normalize_requirements(extract_pdf(path, tmp_path))
+
+    assert {item.text for item in result} == {
+        "Device shall stop within 2 seconds.",
+        "Device shall stop within 3 seconds.",
+        "Device shall stop within 4 seconds.",
+    }
+
+
 def test_rejects_scanned_or_empty_page(tmp_path: Path) -> None:
     pdf = build_image_only_pdf(tmp_path / "scan.pdf")
     with pytest.raises(ReviewException, match="PDF_SCANNED"):

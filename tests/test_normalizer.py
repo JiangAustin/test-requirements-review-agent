@@ -3,9 +3,13 @@ from __future__ import annotations
 from requirements_review_agent.models import (
     ExtractedDocument,
     ExtractedPage,
+    ExtractedTable,
     SourceRef,
 )
-from requirements_review_agent.normalizer import normalize_requirements
+from requirements_review_agent.normalizer import (
+    normalize_requirements,
+    normalize_requirements_with_diagnostics,
+)
 
 
 def extracted_document_with(text: str) -> ExtractedDocument:
@@ -89,3 +93,246 @@ def test_ambiguous_multi_sentence_includes_chinese_and_marks_manual() -> None:
     items = normalize_requirements(doc)
     assert len(items) == 1
     assert items[0].needs_manual_review is True
+
+
+def block(page: int, text: str, bbox: tuple[float, float, float, float]) -> SourceRef:
+    return SourceRef(
+        page=page,
+        quote=text,
+        section=None,
+        table_index=None,
+        bbox=bbox,
+    )
+
+
+def test_filters_repeated_headers_footers_page_numbers_and_toc() -> None:
+    pages = tuple(
+        ExtractedPage(
+            page=page_number,
+            text="",
+            blocks=(
+                block(page_number, "Product Requirements Specification", (40, 20, 400, 35)),
+                block(page_number, str(page_number), (280, 790, 300, 805)),
+                block(page_number, "Device shall stop within 3 seconds.", (40, 200, 450, 230)),
+            )
+            if page_number > 1
+            else (
+                block(page_number, "Product Requirements Specification", (40, 20, 400, 35)),
+                block(page_number, "Table of Contents", (40, 100, 300, 125)),
+                block(page_number, "1. Safety requirements ........ 3", (40, 140, 400, 160)),
+                block(page_number, str(page_number), (280, 790, 300, 805)),
+            ),
+            tables=(),
+        )
+        for page_number in range(1, 5)
+    )
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=pages)
+    )
+
+    assert {item.text for item in result.requirements} == {
+        "Device shall stop within 3 seconds."
+    }
+    assert result.filtered_counts == {
+        "page_number": 4,
+        "repeated_margin": 4,
+        "table_of_contents": 2,
+    }
+
+
+def test_filters_document_approval_metadata_but_keeps_real_requirement() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Document ID: PRS-1234", (40, 80, 300, 100)),
+            block(1, "Revision: 1.2", (40, 110, 300, 130)),
+            block(1, "Approved by: Jane Doe", (40, 140, 300, 160)),
+            block(1, "The controller must retain the revision identifier.", (40, 220, 500, 245)),
+        ),
+        tables=(),
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "The controller must retain the revision identifier."
+    ]
+    assert result.filtered_counts == {"document_metadata": 3}
+
+
+def test_keeps_metadata_like_text_when_it_contains_requirement_language() -> None:
+    document = extracted_document_with("Revision must be visible in the diagnostic report.")
+
+    result = normalize_requirements_with_diagnostics(document)
+
+    assert [item.text for item in result.requirements] == [
+        "Revision must be visible in the diagnostic report."
+    ]
+    assert result.filtered_counts == {}
+
+
+def test_keeps_status_sentence_and_colon_terminated_modal_requirement() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Status update is pending.", (40, 100, 300, 120)),
+            block(1, "The device must:", (40, 140, 300, 160)),
+        ),
+        tables=(),
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Status update is pending.",
+        "The device must:",
+    ]
+    assert result.filtered_counts == {}
+
+
+def test_keeps_modal_toc_like_text_and_body_number() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Device shall stop ........ 4", (40, 150, 400, 170)),
+            block(1, "30", (40, 300, 80, 320)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Device shall stop ........ 4",
+        "30",
+    ]
+
+
+def test_filters_metadata_without_colon_and_drifting_a4_footer() -> None:
+    pages = tuple(
+        ExtractedPage(
+            page=page_number,
+            text="",
+            blocks=(
+                block(page_number, "Document ID PRS-1234", (40, 100, 300, 120)),
+                block(
+                    page_number,
+                    "Confidential",
+                    (40, 805 + (page_number * 3), 200, 820 + (page_number * 3)),
+                ),
+            ),
+            tables=(),
+            height=842,
+        )
+        for page_number in range(1, 4)
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=pages)
+    )
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {
+        "document_metadata": 3,
+        "repeated_margin": 3,
+    }
+
+
+def test_filters_text_block_duplicated_inside_extracted_table() -> None:
+    table = ExtractedTable(
+        page=1,
+        table_index=0,
+        bbox=(40, 100, 500, 200),
+        cells=(("Requirement", "Value"), ("Timeout", "30 s")),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Requirement Value Timeout 30 s", (45, 105, 495, 195)),
+            block(1, "Device shall report a timeout event.", (40, 240, 500, 265)),
+        ),
+        tables=(table,),
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert {item.text for item in result.requirements} == {
+        "Timeout | 30 s",
+        "Device shall report a timeout event.",
+    }
+    assert result.filtered_counts == {"table_overlap": 1}
+
+
+def test_filters_revision_history_table_but_keeps_parameter_table() -> None:
+    revision_table = ExtractedTable(
+        page=1,
+        table_index=0,
+        bbox=(40, 100, 500, 180),
+        cells=(
+            ("Revision", "Date", "Author", "Description"),
+            ("1.0", "2026-09-03", "Jane Doe", "Initial release"),
+        ),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    parameter_table = ExtractedTable(
+        page=1,
+        table_index=1,
+        bbox=(40, 220, 500, 300),
+        cells=(("Parameter", "Value"), ("Timeout", "30 s")),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(),
+        tables=(revision_table, parameter_table),
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == ["Timeout | 30 s"]
+    assert result.filtered_counts == {"document_metadata": 1}
+
+
+def test_filters_approval_table_but_keeps_rows_with_requirement_language() -> None:
+    table = ExtractedTable(
+        page=1,
+        table_index=0,
+        bbox=(40, 100, 500, 220),
+        cells=(
+            ("Approval", "Date", "Approver", "Signature"),
+            ("Accepted", "2026-09-03", "Jane Doe", "JD"),
+            ("Constraint", "", "", "Approval must be recorded."),
+        ),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(page=1, text="", blocks=(), tables=(table,))
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Constraint |  |  | Approval must be recorded."
+    ]
+    assert result.filtered_counts == {"document_metadata": 1}

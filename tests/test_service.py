@@ -42,6 +42,15 @@ def build_pdf(path: Path) -> Path:
     document.close()
     return path
 
+def build_pdf_with_metadata(path: Path) -> Path:
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((50, 60), "Document ID: PRS-1234", fontsize=10)
+    page.insert_text((50, 120), "Device shall stop within 3 seconds.", fontsize=12)
+    document.save(path)
+    document.close()
+    return path
+
 
 def test_prepare_uses_bundled_rule_pack_when_workspace_has_no_rules(tmp_path: Path) -> None:
     pdf = build_pdf(tmp_path / "requirements.pdf")
@@ -49,6 +58,15 @@ def test_prepare_uses_bundled_rule_pack_when_workspace_has_no_rules(tmp_path: Pa
     prepared = ReviewService(tmp_path).prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
 
     assert prepared.requirement_count == 1
+
+def test_prepare_reports_normalization_filter_counts(tmp_path: Path) -> None:
+    pdf = build_pdf_with_metadata(tmp_path / "requirements.pdf")
+
+    prepared = ReviewService(tmp_path).prepare(pdf, "home-iot-v1", ProviderMode.COPILOT)
+
+    assert prepared.requirement_count == 1
+    assert "normalization:candidates=2;kept=1;filtered=1" in prepared.warnings
+    assert "normalization:filtered:document_metadata=1" in prepared.warnings
 
 
 def test_prepare_prefers_workspace_rule_pack_over_bundled(tmp_path: Path) -> None:
