@@ -32,7 +32,7 @@ uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git
 
 将 PDF 上传到项目的 `requirements/` 目录，再从该目录附加到 Copilot Chat。Agent 会直接读取 attachment metadata 中的 workspace-local 路径；如果附件不在 `requirements/`，Agent 会要求先上传到该目录。目录中的实际需求文件默认 ignored，仅 `.gitkeep` 可提交，避免误把需求文档加入版本库。
 
-`prepare_review` 默认使用内置 rule pack `home-iot-v1` 和 model mode `copilot`。日常使用只需提供或附加 PDF；需要 `company_api`、`local` 或其他 rule pack 时再显式指定。
+`prepare_review` 默认使用内置 rule pack `home-iot-v1`、model mode `copilot` 和 review mode `fast`。汽车 ECU 软件规范应显式指定 `rule_pack="automotive-ecu-v1"`；仍使用 Copilot Chat 完成分析，无需本地模型服务。fast mode 会先把 PDF 片段聚合为逻辑需求，再通过紧凑 verdict 分批分析，避免重复传输完整 source 和规则字段。
 
 可选健康检查：
 
@@ -44,7 +44,7 @@ uvx --from git+https://github.com/JiangAustin/test-requirements-review-agent.git
 
 ## Rule pack 覆盖
 
-默认直接使用内置 `home-iot-v1`。如需项目定制，在目标项目创建 `rules/<name>.yaml`，评审时传入 `<name>`；项目文件优先于同名内置 rule pack。PDF 仍必须位于当前 workspace 内，运行产物写入当前项目的 `.runs/`。
+内置规则包包括面向智能家居的 `home-iot-v1` 和面向汽车 ECU 软件规范的 `automotive-ecu-v1`。默认仍为 `home-iot-v1`；评审汽车文档时将 `automotive-ecu-v1` 传给 `prepare_review`。如需项目定制，在目标项目创建 `rules/<name>.yaml`，评审时传入 `<name>`；项目文件优先于同名内置 rule pack。PDF 仍必须位于当前 workspace 内，运行产物写入当前项目的 `.runs/`。
 
 ## 仓库开发
 
@@ -73,17 +73,19 @@ uv run mcp dev src/requirements_review_agent/server.py
 - 可通过 MCP: List Servers 检查 requirements-review 是否已注册并启动。
 - 用于开发调试的命令是 uv run mcp dev src/requirements_review_agent/server.py。
 
-## 六工具工作流与示例
+## Fast 工作流与示例
 
-Requirements Review Agent 只应驱动这六个工具：prepare_review、get_analysis_batch、submit_analysis、run_provider_analysis、finalize_review、get_review_status。
+默认 fast 工作流使用 `prepare_review`、`get_next_review_batch`、`submit_review_verdicts`、`finalize_review` 和 `get_review_status`。`get_next_review_batch` 自动返回第一个未完成批次，提交成功即持久化；中断后重复原请求可从未完成批次继续。
+
+显式 `review_mode="strict"` 时保留原有 `get_analysis_batch` 和 `submit_analysis`。`company_api` 与 `local` provider 当前仅支持 strict mode，并通过 `run_provider_analysis` 执行。
 
 demo usage：
 
 1. 将 PDF 上传到 `requirements/`，并在 Chat 中附加该文件。
-2. 默认直接使用 `home-iot-v1` 与 `copilot`；如需其他配置再显式指定。
+2. 智能家居文档默认使用 `home-iot-v1`；汽车 ECU 文档显式使用 `automotive-ecu-v1`，model mode 保持 `copilot`。
 3. 确认 provider 和 data destination。
-4. 执行 prepare_review。
-5. Copilot 模式逐批调用 get_analysis_batch 和 submit_analysis；company_api/local 模式调用 run_provider_analysis。
+4. 执行 `prepare_review`；默认 fast mode。
+5. Copilot fast 模式重复调用 `get_next_review_batch` 和 `submit_review_verdicts`，直到返回 `done=true`；company_api/local 模式显式选择 strict 后调用 `run_provider_analysis`。
 6. 执行 finalize_review 与 get_review_status，并从 `.runs/<run-id>/reports/` 打开 JSON、Markdown、DOCX。
 
 ## Provider 模式、环境变量与安全
@@ -138,6 +140,7 @@ $env:RRA_LOCAL_MODEL = Read-Host "Local model"
 ## PDF 候选需求过滤
 
 - normalizer 会过滤高置信 document noise，包括 page numbers、table of contents entries、重复页眉/页脚、document approval/revision metadata，以及与 extracted table 重叠的 text blocks。
+- fast mode 会按 `VESW-1234 - title` 等工作项 section 聚合相关片段；section 外仅保留具有明确规范性 modal 的独立需求。
 - `prepare_review.warnings` 会报告 candidates、kept、filtered 总数，并按 filter reason 提供计数，便于识别异常候选量。
 - normalization 后会抽查前 50 条 candidates；疑似目录、审批或组合页码超过 10% 时，`prepare_review` 返回 `ANALYSIS_INVALID`，details 包含 `reason=residual_document_noise`、分类计数和示例 requirement IDs，不创建 run。
 - 已创建 run 的 extracted/requirements stages 不会追溯重算。升级后必须对原 PDF 重新执行 `prepare_review` 并使用新的 `run_id`；旧 run（例如 `20260903T094002Z-82618e17`）仍保留原候选集。

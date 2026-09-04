@@ -107,6 +107,8 @@ def build_analysis_batch(
     ordered_applicable = _ordered_applicable(ordered_requirements, applicable)
     instructions = (
         "请逐条分析每个 AtomicRequirement，并且仅基于提供的原文证据输出 AnalysisSubmission JSON。"
+        "requirements 必须且只能包含本批次全部 requirement_id；每条 checks 必须且只能包含"
+        "该 requirement 的全部 applicable rule_id。"
         "所有缺失或待确认项必须给出中文问题；不要添加 score 字段；"
         "rule_id、scenario category 与 evidence 必须严格引用批次中提供的数据。"
     )

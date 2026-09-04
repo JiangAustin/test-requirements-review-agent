@@ -22,15 +22,27 @@ from .errors import (
     ReviewError,
     ReviewException,
 )
+from .fast_analysis import (
+    DEFAULT_FAST_BATCH_BYTES,
+    FAST_SCHEMA_VERSION,
+    CompactAnalysisSubmission,
+    FastAnalysisBatch,
+    NextFastBatch,
+    build_fast_batches,
+    expand_compact_submission,
+)
+from .logical_requirements import group_logical_requirements
 from .models import (
     AnalysisSubmission,
     ApplicableRule,
     AtomicRequirement,
+    LogicalRequirement,
     PreparedReview,
     ProviderMode,
     ReportArtifacts,
     RequirementAnalysis,
     RequirementReview,
+    ReviewMode,
     ReviewReport,
     RunStatus,
 )
@@ -85,24 +97,36 @@ class ReviewService:
         rules_root: Path | None = None,
         provider_factory: Callable[[ProviderMode], AnalysisProvider | None] | None = None,
         analysis_batch_size: int = DEFAULT_ANALYSIS_BATCH_SIZE,
+        fast_batch_bytes: int = DEFAULT_FAST_BATCH_BYTES,
     ) -> None:
         if analysis_batch_size < 1:
             raise ValueError("analysis_batch_size must be positive")
+        if fast_batch_bytes < 1:
+            raise ValueError("fast_batch_bytes must be positive")
         self.workspace = workspace
         self._workspace = workspace.resolve()
         self._rules_root = (rules_root or (workspace / "rules")).resolve()
         self._store = RunStore(self._workspace)
         self._provider_factory = provider_factory or self._default_provider_factory
         self._analysis_batch_size = analysis_batch_size
+        self._fast_batch_bytes = fast_batch_bytes
 
-    def prepare(self, pdf: Path, rule_pack: str, mode: ProviderMode) -> PreparedReview:
+    def prepare(
+        self,
+        pdf: Path,
+        rule_pack: str,
+        mode: ProviderMode,
+        review_mode: ReviewMode = ReviewMode.STRICT,
+    ) -> PreparedReview:
+        if review_mode is ReviewMode.FAST and mode is not ProviderMode.COPILOT:
+            raise _analysis_invalid("fast review 当前仅支持 copilot provider")
         rule_path = self._resolve_rule_pack(rule_pack)
         extracted = extract_pdf(pdf, self._workspace)
         normalization = normalize_requirements_with_diagnostics(extracted)
-        requirements = normalization.requirements
-        if not requirements:
+        atomic_requirements = normalization.requirements
+        if not atomic_requirements:
             raise _analysis_invalid("未提取到可分析的需求", stage="prepare")
-        residual_noise = detect_residual_document_noise(requirements)
+        residual_noise = detect_residual_document_noise(atomic_requirements)
         if (
             residual_noise.sample_size
             and residual_noise.suspected_count / residual_noise.sample_size > 0.1
@@ -122,21 +146,48 @@ class ReviewService:
             if rule_path is not None
             else load_bundled_rule_pack(rule_pack)
         )
+        logical_requirements: tuple[LogicalRequirement, ...] = ()
+        if review_mode is ReviewMode.FAST:
+            logical_requirements = group_logical_requirements(atomic_requirements)
+            if not logical_requirements:
+                raise _analysis_invalid("未提取到可分析的逻辑需求", stage="prepare")
+            requirements = tuple(
+                AtomicRequirement(
+                    requirement_id=item.requirement_id,
+                    text=item.text,
+                    sources=item.sources,
+                    needs_manual_review=item.needs_manual_review,
+                )
+                for item in logical_requirements
+            )
+        else:
+            requirements = atomic_requirements
         applicable = {
             requirement.requirement_id: select_applicable_rules(requirement, pack)
             for requirement in requirements
         }
-        warning_items = [
+        manual_review_ids = [
             requirement.requirement_id
             for requirement in requirements
             if requirement.needs_manual_review
         ]
+        if review_mode is ReviewMode.FAST and manual_review_ids:
+            examples = ",".join(manual_review_ids[:10])
+            warning_items = [
+                f"logical:manual_review={len(manual_review_ids)};examples={examples}"
+            ]
+        else:
+            warning_items = manual_review_ids
+        if review_mode is ReviewMode.FAST:
+            warning_items.append(
+                f"logical:atomic={len(atomic_requirements)};grouped={len(requirements)}"
+            )
         filtered_count = sum(normalization.filtered_counts.values())
         if filtered_count:
             warning_items.append(
                 "normalization:"
-                f"candidates={len(requirements) + filtered_count};"
-                f"kept={len(requirements)};filtered={filtered_count}"
+                f"candidates={len(atomic_requirements) + filtered_count};"
+                f"kept={len(atomic_requirements)};filtered={filtered_count}"
             )
             warning_items.extend(
                 f"normalization:filtered:{reason}={count}"
@@ -145,15 +196,27 @@ class ReviewService:
         warnings = tuple(warning_items)
         data_destination = self._data_destination(mode)
         model_name = self._model_name_for_mode(mode)
-        batch_count = (
-            len(requirements) + self._analysis_batch_size - 1
-        ) // self._analysis_batch_size
         manifest = self._store.create_run(
             pdf_hash=extracted.sha256,
             rule_version=pack.version,
             model_mode=mode,
-            schema_version=SCHEMA_VERSION,
+            schema_version=(
+                FAST_SCHEMA_VERSION if review_mode is ReviewMode.FAST else SCHEMA_VERSION
+            ),
         )
+        fast_batches: tuple[FastAnalysisBatch, ...] = ()
+        if review_mode is ReviewMode.FAST:
+            fast_batches = build_fast_batches(
+                manifest.run_id,
+                logical_requirements,
+                applicable,
+                max_batch_bytes=self._fast_batch_bytes,
+            )
+            batch_count = len(fast_batches)
+        else:
+            batch_count = (
+                len(requirements) + self._analysis_batch_size - 1
+            ) // self._analysis_batch_size
         state: dict[str, object] = {
             "run_id": manifest.run_id,
             "stage": "prepared",
@@ -168,6 +231,7 @@ class ReviewService:
             "submitted_batch_indices": [],
             "artifacts": None,
             "rule_version": pack.version,
+            "review_mode": review_mode.value,
         }
         self._store.write_stage(manifest.run_id, "extracted", extracted.model_dump(mode="json"))
         self._store.write_stage(
@@ -175,6 +239,30 @@ class ReviewService:
             "requirements",
             {"requirements": [item.model_dump(mode="json") for item in requirements]},
         )
+        if review_mode is ReviewMode.FAST:
+            self._store.write_stage(
+                manifest.run_id,
+                "atomic_requirements",
+                {
+                    "requirements": [
+                        item.model_dump(mode="json") for item in atomic_requirements
+                    ]
+                },
+            )
+            self._store.write_stage(
+                manifest.run_id,
+                "logical_requirements",
+                {
+                    "requirements": [
+                        item.model_dump(mode="json") for item in logical_requirements
+                    ]
+                },
+            )
+            self._store.write_stage(
+                manifest.run_id,
+                "fast_batches",
+                {"batches": [item.model_dump(mode="json") for item in fast_batches]},
+            )
         self._store.write_stage(
             manifest.run_id,
             "applicable",
@@ -193,10 +281,13 @@ class ReviewService:
             requirement_count=len(requirements),
             warnings=warnings,
             batch_count=batch_count,
+            review_mode=review_mode,
         )
 
     def get_batch(self, run_id: str, batch_index: int) -> AnalysisBatch:
         state = self._load_state(run_id)
+        if self._review_mode(state) is ReviewMode.FAST:
+            raise _analysis_invalid("fast review 请使用 get_next_review_batch")
         if state["stage"] not in {"prepared", "analyzed"}:
             raise _analysis_invalid(
                 "当前阶段不允许读取分析批次",
@@ -219,6 +310,99 @@ class ReviewService:
             for requirement in batch_requirements
         }
         return build_analysis_batch(run_id, batch_index, batch_requirements, batch_applicable)
+
+    def get_next_fast_batch(self, run_id: str) -> NextFastBatch:
+        state = self._load_state(run_id)
+        if self._review_mode(state) is not ReviewMode.FAST:
+            raise _analysis_invalid("当前运行不是 fast review", run_id=run_id)
+        if state["stage"] in {"analyzed", "finalized", "partial"}:
+            return NextFastBatch(done=True)
+        if state["stage"] != "prepared":
+            raise _analysis_invalid("当前阶段不允许读取 fast batch", run_id=run_id)
+        batches = self._load_fast_batches(run_id)
+        submitted = self._submitted_batch_indices(state)
+        for index, batch in enumerate(batches):
+            if index not in submitted:
+                return NextFastBatch(done=False, batch=batch)
+        return NextFastBatch(done=True)
+
+    def submit_fast(
+        self,
+        run_id: str,
+        batch_id: str,
+        submission: CompactAnalysisSubmission | dict[str, object],
+    ) -> RunStatus:
+        state = self._load_state(run_id)
+        if self._review_mode(state) is not ReviewMode.FAST:
+            raise _analysis_invalid("当前运行不是 fast review", run_id=run_id)
+        try:
+            parsed = (
+                submission
+                if isinstance(submission, CompactAnalysisSubmission)
+                else CompactAnalysisSubmission.model_validate(submission)
+            )
+        except ValidationError as exc:
+            raise _analysis_invalid("compact 分析结果结构无效", error=str(exc)[:200]) from exc
+        if parsed.batch_id != batch_id:
+            raise _analysis_invalid("compact batch_id 不匹配", batch_id=batch_id)
+
+        batches = self._load_fast_batches(run_id)
+        batch_index = next(
+            (index for index, batch in enumerate(batches) if batch.batch_id == batch_id),
+            None,
+        )
+        if batch_index is None:
+            raise _analysis_invalid("未知 fast batch_id", batch_id=batch_id)
+        submitted = self._submitted_batch_indices(state)
+        compact_stage = self._fast_compact_stage(batch_index)
+        if batch_index in submitted:
+            try:
+                existing = CompactAnalysisSubmission.model_validate(
+                    self._store.read_stage(run_id, compact_stage)
+                )
+            except (OSError, ValueError, TypeError, ValidationError) as exc:
+                raise _analysis_invalid("compact batch 结果已损坏", batch_id=batch_id) from exc
+            if existing != parsed:
+                raise _analysis_invalid("fast batch 已提交且内容冲突", batch_id=batch_id)
+            return self._status_from_state(run_id, state)
+        if state["stage"] != "prepared":
+            raise _analysis_invalid("当前阶段不允许提交 fast 分析结果", run_id=run_id)
+
+        logical = self._load_logical_requirements(run_id)
+        requirement_by_id = {item.requirement_id: item for item in logical}
+        batch_requirements = tuple(
+            requirement_by_id[item.requirement_id] for item in batches[batch_index].requirements
+        )
+        applicable = self._load_applicable(run_id)
+        batch_applicable = {
+            item.requirement_id: applicable[item.requirement_id]
+            for item in batch_requirements
+        }
+        analyses = expand_compact_submission(
+            batches[batch_index], parsed, batch_requirements, batch_applicable
+        )
+        full_submission = AnalysisSubmission(
+            schema_version=SCHEMA_VERSION,
+            requirements=analyses,
+        )
+        self._store.write_stage(run_id, compact_stage, parsed.model_dump(mode="json"))
+        self._store.write_stage(
+            run_id,
+            self._batch_submission_stage(batch_index),
+            full_submission.model_dump(mode="json"),
+        )
+        submitted.add(batch_index)
+        state["submitted_batch_indices"] = sorted(submitted)
+        state["analyzed_count"] = int(state.get("analyzed_count", 0)) + len(analyses)
+        if len(submitted) == self._state_batch_count(state):
+            requirements = self._load_requirements(run_id)
+            merged = self._merge_batch_submissions(run_id, state)
+            validate_submission(merged, requirements, applicable)
+            self._store.write_stage(run_id, "submission", merged.model_dump(mode="json"))
+            state["stage"] = "analyzed"
+            state["analyzed_count"] = len(requirements)
+        self._store.write_stage(run_id, "service", state)
+        return self._status_from_state(run_id, state)
 
     def submit(
         self, run_id: str, submission: AnalysisSubmission | dict[str, object]
@@ -414,6 +598,33 @@ class ReviewService:
         except (OSError, ValueError, TypeError, ValidationError) as exc:
             raise _analysis_invalid("requirements 阶段数据无效", run_id=run_id) from exc
 
+    def _load_logical_requirements(
+        self, run_id: str
+    ) -> tuple[LogicalRequirement, ...]:
+        try:
+            payload = self._store.read_stage(run_id, "logical_requirements")
+            items = payload.get("requirements", [])
+            if not isinstance(items, list):
+                raise ValueError("invalid logical requirements")
+            return tuple(LogicalRequirement.model_validate(item) for item in items)
+        except (OSError, ValueError, TypeError, ValidationError) as exc:
+            raise _analysis_invalid(
+                "logical requirements 阶段数据无效", run_id=run_id
+            ) from exc
+
+    def _load_fast_batches(self, run_id: str) -> tuple[FastAnalysisBatch, ...]:
+        try:
+            payload = self._store.read_stage(run_id, "fast_batches")
+            items = payload.get("batches", [])
+            if not isinstance(items, list):
+                raise ValueError("invalid fast batches")
+            batches = tuple(FastAnalysisBatch.model_validate(item) for item in items)
+            if not batches:
+                raise ValueError("empty fast batches")
+            return batches
+        except (OSError, ValueError, TypeError, ValidationError) as exc:
+            raise _analysis_invalid("fast batches 阶段数据无效", run_id=run_id) from exc
+
     def _load_applicable(self, run_id: str) -> dict[str, tuple[ApplicableRule, ...]]:
         try:
             payload = self._store.read_stage(run_id, "applicable")
@@ -510,6 +721,9 @@ class ReviewService:
     def _batch_submission_stage(self, batch_index: int) -> str:
         return f"submission_{batch_index:06d}"
 
+    def _fast_compact_stage(self, batch_index: int) -> str:
+        return f"fast_compact_{batch_index:06d}"
+
     def _merge_batch_submissions(
         self, run_id: str, state: dict[str, Any]
     ) -> AnalysisSubmission:
@@ -574,6 +788,15 @@ class ReviewService:
             warnings=tuple(str(item) for item in warnings if isinstance(item, str)),
             artifacts=artifacts,
         )
+
+    def _review_mode(self, state: dict[str, Any]) -> ReviewMode:
+        raw_mode = state.get("review_mode", ReviewMode.STRICT.value)
+        if not isinstance(raw_mode, str):
+            raise _analysis_invalid("运行 review mode 无效")
+        try:
+            return ReviewMode(raw_mode)
+        except ValueError as exc:
+            raise _analysis_invalid("运行 review mode 无效") from exc
 
     def _data_destination(self, mode: ProviderMode) -> str:
         if mode is ProviderMode.COPILOT:

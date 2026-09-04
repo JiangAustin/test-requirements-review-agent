@@ -22,6 +22,11 @@ _TOC_ENTRY_RE = re.compile(
     r"^\d+(?:\.\d+)*\.?\s+.+?(?:\s*\.){3,}\s*\d+\s*$"
 )
 _TOC_TITLE_RE = re.compile(r"^(?:table\s+of\s+contents?|contents?)$", re.IGNORECASE)
+_WORK_ITEM_HEADING_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+\s+-\s+\S.+$")
+_STAKEHOLDER_ENTRY_RE = re.compile(
+    r"^\[(?:EXTERNAL\s+)?[^\]\n]{2,80}\([^)]{2,80}\),?$",
+    re.IGNORECASE,
+)
 _DOCUMENT_METADATA_RE = re.compile(
     r"^(?:(?:document\s+(?:id|number|no\.?|title)|revision|version|status|"
     r"approved\s+by|prepared\s+by|reviewed\s+by|author|owner|date)\s*[:：]\s*\S.*|"
@@ -172,6 +177,8 @@ def _block_filter_reason(
         return "table_of_contents"
     if (_TOC_TITLE_RE.fullmatch(text) or _TOC_ENTRY_RE.fullmatch(text)) and not modal:
         return "table_of_contents"
+    if _STAKEHOLDER_ENTRY_RE.fullmatch(text) and not modal:
+        return "document_metadata"
     if (_DOCUMENT_METADATA_RE.match(text) or _DOCUMENT_HISTORY_RE.fullmatch(text)) and not modal:
         return "document_metadata"
     if metadata_page and not modal:
@@ -406,8 +413,11 @@ def normalize_requirements_with_diagnostics(
                 and not _REQUIREMENT_MODAL_RE.search(txt)
                 and not txt.isdecimal()
             )
+            work_item_heading = bool(_WORK_ITEM_HEADING_RE.fullmatch(txt))
 
-            if (ends_with_colon or short_no_punct) and not _REQUIREMENT_MODAL_RE.search(txt):
+            if (
+                ends_with_colon or short_no_punct or work_item_heading
+            ) and not _REQUIREMENT_MODAL_RE.search(txt):
                 last_heading = txt.rstrip(":：").strip()
                 continue
 

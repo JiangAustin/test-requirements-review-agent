@@ -232,9 +232,10 @@ def test_workspace_agent_and_portable_config_contracts_exist() -> None:
         "1. 从 Chat attachment metadata 读取 `requirements/` 下的 PDF 路径；"
         "没有附件时询问该目录内的 PDF 路径",
         "2. 说明 provider 和数据去向，并在非 Copilot 外部传输前取得明确确认",
-        "3. 调用 prepare_review，并在 unsupported/scanned/encrypted PDF 时停止",
-        "4. Copilot 模式下对每个 batch 调用 get_analysis_batch、"
-        "生成 schema-valid 结果并调用 submit_analysis",
+        "3. 调用 prepare_review，默认 review mode 为 fast；"
+        "在 unsupported/scanned/encrypted PDF 时停止",
+        "4. Copilot fast 模式反复调用 get_next_review_batch，并将 compact verdicts "
+        "提交到 submit_review_verdicts，直到 done=true",
         "5. company_api 或 local 模式调用 run_provider_analysis",
         "6. 调用 finalize_review，然后调用 get_review_status",
         "7. 用中文总结 blocking findings、两个指标定义、failed items 和本地产物路径",
@@ -245,8 +246,10 @@ def test_workspace_agent_and_portable_config_contracts_exist() -> None:
         assert current_index > last_index
         last_index = current_index
 
-    assert "rule pack 默认 `home-iot-v1`" in body
+    assert "汽车 ECU 文档使用 `automotive-ecu-v1`" in body
+    assert "其他文档 rule pack 默认 `home-iot-v1`" in body
     assert "model mode 默认 `copilot`" in body
+    assert "review mode 默认 `fast`" in body
     assert "需求可测试性得分不是现有用例覆盖率，也不是测试执行覆盖率" in body
     assert "建议场景覆盖度不是现有用例覆盖率，也不是测试执行覆盖率" in body
     assert "company_api" in body and "显式确认 external transfer" in body

@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 from mcp import Client
 
-from requirements_review_agent.models import AnalysisSubmission, ProviderMode
+from requirements_review_agent.fast_analysis import CompactAnalysisSubmission
+from requirements_review_agent.models import AnalysisSubmission, ProviderMode, ReviewMode
 from requirements_review_agent.server import get_service, main, mcp
 
 
@@ -16,8 +17,14 @@ class StubService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
-    def prepare(self, pdf: Path, rule_pack: str, mode: ProviderMode) -> Any:
-        self.calls.append(("prepare", (pdf, rule_pack, mode), {}))
+    def prepare(
+        self,
+        pdf: Path,
+        rule_pack: str,
+        mode: ProviderMode,
+        review_mode: ReviewMode = ReviewMode.STRICT,
+    ) -> Any:
+        self.calls.append(("prepare", (pdf, rule_pack, mode, review_mode), {}))
         return type(
             "Prepared",
             (),
@@ -29,9 +36,32 @@ class StubService:
                     "requirement_count": 1,
                     "warnings": [],
                     "batch_count": 1,
+                    "review_mode": review_mode.value,
                 }
             },
         )()
+
+    def get_next_fast_batch(self, run_id: str) -> Any:
+        self.calls.append(("get_next_fast_batch", (run_id,), {}))
+        return type(
+            "NextBatch",
+            (),
+            {
+                "model_dump": lambda self, mode="json": {
+                    "done": True,
+                    "batch": None,
+                }
+            },
+        )()
+
+    def submit_fast(
+        self,
+        run_id: str,
+        batch_id: str,
+        submission: CompactAnalysisSubmission,
+    ) -> Any:
+        self.calls.append(("submit_fast", (run_id, batch_id, submission), {}))
+        return self.submit(run_id, AnalysisSubmission(schema_version="1.0", requirements=()))
 
     def get_batch(self, run_id: str, batch_index: int) -> Any:
         self.calls.append(("get_batch", (run_id, batch_index), {}))
@@ -118,7 +148,7 @@ class StubService:
 
 
 @pytest.mark.asyncio
-async def test_server_lists_exactly_six_tools() -> None:
+async def test_server_lists_fast_and_strict_tools() -> None:
     async with Client(mcp) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
 
@@ -129,6 +159,8 @@ async def test_server_lists_exactly_six_tools() -> None:
         "run_provider_analysis",
         "finalize_review",
         "get_review_status",
+        "get_next_review_batch",
+        "submit_review_verdicts",
     }
 
 
@@ -189,14 +221,51 @@ async def test_prepare_review_defaults_to_bundled_rules_and_copilot(
     properties = tools["prepare_review"].input_schema["properties"]
     assert properties["rule_pack"]["default"] == "home-iot-v1"
     assert properties["model_mode"]["default"] == "copilot"
+    assert properties["review_mode"]["default"] == "fast"
     assert prepared.structured_content["provider_mode"] == "copilot"
     assert stub.calls == [
         (
             "prepare",
-            (Path("requirements") / "input.pdf", "home-iot-v1", ProviderMode.COPILOT),
+            (
+                Path("requirements") / "input.pdf",
+                "home-iot-v1",
+                ProviderMode.COPILOT,
+                ReviewMode.FAST,
+            ),
             {},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_fast_tools_expose_compact_schema_and_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = StubService()
+    monkeypatch.setattr("requirements_review_agent.server.get_service", lambda: stub)
+
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        next_batch = await client.call_tool(
+            "get_next_review_batch", {"run_id": "run-1"}
+        )
+        submitted = await client.call_tool(
+            "submit_review_verdicts",
+            {
+                "run_id": "run-1",
+                "batch_id": "fast-1",
+                "submission": {
+                    "schema_version": "2.0",
+                    "batch_id": "fast-1",
+                    "items": [],
+                },
+            },
+        )
+
+    schema = tools["submit_review_verdicts"].input_schema
+    assert "CompactAnalysisSubmission" in schema["$defs"]
+    assert next_batch.structured_content == {"done": True, "batch": None}
+    assert submitted.structured_content["stage"] == "analyzed"
 
 
 @pytest.mark.asyncio

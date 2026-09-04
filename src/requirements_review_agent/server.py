@@ -6,7 +6,8 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
-from .models import AnalysisSubmission, ProviderMode
+from .fast_analysis import CompactAnalysisSubmission
+from .models import AnalysisSubmission, ProviderMode, ReviewMode
 from .service import ReviewService
 
 mcp = MCPServer("requirements-review")
@@ -25,8 +26,11 @@ def prepare_review(
     pdf_path: str,
     rule_pack: str = "home-iot-v1",
     model_mode: ProviderMode = ProviderMode.COPILOT,
+    review_mode: ReviewMode = ReviewMode.FAST,
 ) -> dict[str, object]:
-    prepared = get_service().prepare(Path(pdf_path), rule_pack, model_mode)
+    prepared = get_service().prepare(
+        Path(pdf_path), rule_pack, model_mode, review_mode=review_mode
+    )
     return prepared.model_dump(mode="json")
 
 
@@ -39,6 +43,22 @@ def get_analysis_batch(run_id: str, batch_index: int) -> dict[str, object]:
 @mcp.tool(name="submit_analysis", structured_output=True)
 def submit_analysis(run_id: str, submission: AnalysisSubmission) -> dict[str, object]:
     status = get_service().submit(run_id, submission)
+    return status.model_dump(mode="json")
+
+
+@mcp.tool(name="get_next_review_batch", structured_output=True)
+def get_next_review_batch(run_id: str) -> dict[str, object]:
+    result = get_service().get_next_fast_batch(run_id)
+    return result.model_dump(mode="json")
+
+
+@mcp.tool(name="submit_review_verdicts", structured_output=True)
+def submit_review_verdicts(
+    run_id: str,
+    batch_id: str,
+    submission: CompactAnalysisSubmission,
+) -> dict[str, object]:
+    status = get_service().submit_fast(run_id, batch_id, submission)
     return status.model_dump(mode="json")
 
 
@@ -67,6 +87,7 @@ def main() -> None:
 
 __all__ = [
     "get_analysis_batch",
+    "get_next_review_batch",
     "get_review_status",
     "get_service",
     "main",
@@ -74,5 +95,6 @@ __all__ = [
     "prepare_review",
     "run_provider_analysis",
     "submit_analysis",
+    "submit_review_verdicts",
     "finalize_review",
 ]

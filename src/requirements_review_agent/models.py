@@ -39,6 +39,11 @@ class ProviderMode(StrEnum):
     LOCAL = "local"
 
 
+class ReviewMode(StrEnum):
+    FAST = "fast"
+    STRICT = "strict"
+
+
 class SourceRef(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -83,6 +88,17 @@ class AtomicRequirement(BaseModel):
     requirement_id: str
     text: str
     sources: tuple[SourceRef, ...]
+    needs_manual_review: bool = False
+
+
+class LogicalRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requirement_id: str
+    title: str | None = None
+    text: str
+    sources: tuple[SourceRef, ...]
+    external_id: str | None = None
     needs_manual_review: bool = False
 
 
@@ -217,6 +233,7 @@ class PreparedReview(BaseModel):
     requirement_count: int
     warnings: tuple[str, ...]
     batch_count: int
+    review_mode: ReviewMode = ReviewMode.STRICT
 
 
 class RunStatus(BaseModel):

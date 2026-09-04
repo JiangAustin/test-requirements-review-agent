@@ -13,6 +13,11 @@ from requirements_review_agent.errors import (
     ReviewError,
     ReviewException,
 )
+from requirements_review_agent.fast_analysis import (
+    CompactAnalysisSubmission,
+    CompactRequirementVerdicts,
+    CompactVerdict,
+)
 from requirements_review_agent.models import (
     AnalysisSubmission,
     CheckResult,
@@ -20,6 +25,7 @@ from requirements_review_agent.models import (
     FindingType,
     ProviderMode,
     RequirementAnalysis,
+    ReviewMode,
     Severity,
     SourceRef,
 )
@@ -204,6 +210,100 @@ def valid_submission_for(batch: AnalysisBatch) -> AnalysisSubmission:
     return AnalysisSubmission(schema_version="1.0", requirements=tuple(analyses))
 
 
+def valid_fast_submission_for(batch: object) -> CompactAnalysisSubmission:
+    return CompactAnalysisSubmission(
+        schema_version="2.0",
+        batch_id=batch.batch_id,
+        items=tuple(
+            CompactRequirementVerdicts(
+                requirement_id=requirement.requirement_id,
+                verdicts={
+                    rule_id: CompactVerdict(
+                        status=CheckStatus.COMPLETE,
+                        evidence=(0,),
+                        confidence=0.9,
+                    )
+                    for rule_id in requirement.rule_ids
+                },
+            )
+            for requirement in batch.requirements
+        ),
+    )
+
+
+def test_fast_prepare_submit_resume_and_finalize(tmp_path: Path) -> None:
+    pdf = build_multi_page_pdf(tmp_path / "requirements.pdf")
+    service = ReviewService(tmp_path, fast_batch_bytes=1_500)
+
+    prepared = service.prepare(
+        pdf,
+        "home-iot-v1",
+        ProviderMode.COPILOT,
+        review_mode=ReviewMode.FAST,
+    )
+
+    assert prepared.review_mode is ReviewMode.FAST
+    assert prepared.batch_count >= 1
+    assert any(item.startswith("logical:atomic=") for item in prepared.warnings)
+    assert len(prepared.warnings) < 20
+    first = service.get_next_fast_batch(prepared.run_id)
+    assert first.done is False
+    assert first.batch is not None
+    submission = valid_fast_submission_for(first.batch)
+    service.submit_fast(prepared.run_id, first.batch.batch_id, submission)
+
+    resumed = ReviewService(tmp_path)
+    repeated = resumed.submit_fast(prepared.run_id, first.batch.batch_id, submission)
+    assert repeated.analyzed_count >= 1
+
+    while True:
+        next_batch = resumed.get_next_fast_batch(prepared.run_id)
+        if next_batch.done:
+            break
+        assert next_batch.batch is not None
+        resumed.submit_fast(
+            prepared.run_id,
+            next_batch.batch.batch_id,
+            valid_fast_submission_for(next_batch.batch),
+        )
+
+    assert resumed.status(prepared.run_id).stage == "analyzed"
+    assert resumed.finalize(prepared.run_id).status == "complete"
+
+
+def test_fast_submit_rejects_conflicting_duplicate(tmp_path: Path) -> None:
+    pdf = build_pdf(tmp_path / "requirements.pdf")
+    service = ReviewService(tmp_path)
+    prepared = service.prepare(
+        pdf,
+        "home-iot-v1",
+        ProviderMode.COPILOT,
+        review_mode=ReviewMode.FAST,
+    )
+    next_batch = service.get_next_fast_batch(prepared.run_id)
+    assert next_batch.batch is not None
+    valid = valid_fast_submission_for(next_batch.batch)
+    service.submit_fast(prepared.run_id, next_batch.batch.batch_id, valid)
+    changed = valid.model_copy(
+        update={
+            "items": tuple(
+                item.model_copy(
+                    update={
+                        "verdicts": {
+                            rule_id: verdict.model_copy(update={"confidence": 0.1})
+                            for rule_id, verdict in item.verdicts.items()
+                        }
+                    }
+                )
+                for item in valid.items
+            )
+        }
+    )
+
+    with pytest.raises(ReviewException, match=ANALYSIS_INVALID):
+        service.submit_fast(prepared.run_id, next_batch.batch.batch_id, changed)
+
+
 class FakeProvider(AnalysisProvider):
     def __init__(self, submission: AnalysisSubmission) -> None:
         self.submission = submission
@@ -268,6 +368,8 @@ def test_copilot_prepare_batch_submit_finalize_status_roundtrip(
     assert batch.batch_index == 0
     assert batch.analysis_submission_schema["title"] == "AnalysisSubmission"
     assert "请逐条分析" in batch.instructions
+    assert "本批次全部 requirement_id" in batch.instructions
+    assert "全部 applicable rule_id" in batch.instructions
 
     with pytest.raises(ReviewException, match=ANALYSIS_INVALID):
         service.finalize(prepared.run_id)

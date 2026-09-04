@@ -120,6 +120,33 @@ def test_heading_is_carried_and_not_emitted_as_requirement() -> None:
     assert items[0].sources[0].section == "Network"
 
 
+def test_long_work_item_heading_is_carried_and_not_emitted() -> None:
+    heading = "VESW-9336 - Product Software Architect Ventilation"
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, heading, (40, 100, 500, 120)),
+            block(1, "The ECU shall enter standby mode.", (40, 140, 500, 160)),
+        ),
+        tables=(),
+    )
+
+    items = normalize_requirements(ExtractedDocument(sha256="deadbeef", pages=(page,)))
+
+    assert [item.text for item in items] == ["The ECU shall enter standby mode."]
+    assert items[0].sources[0].section == heading
+
+
+def test_filters_bracketed_stakeholder_entry() -> None:
+    document = extracted_document_with("[EXTERNAL Zhang Xiang (BCSC, BSH_GDE-EDSC),")
+
+    result = normalize_requirements_with_diagnostics(document)
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"document_metadata": 1}
+
+
 def test_ambiguous_multi_sentence_includes_chinese_and_marks_manual() -> None:
     txt = "该设备必须运行。并在启动时进行校验。"
     doc = extracted_document_with(txt)

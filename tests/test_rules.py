@@ -4,7 +4,11 @@ import pytest
 
 from requirements_review_agent.errors import RULE_PACK_INVALID, ReviewException
 from requirements_review_agent.models import AtomicRequirement, SourceRef
-from requirements_review_agent.rules import load_rule_pack, select_applicable_rules
+from requirements_review_agent.rules import (
+    load_bundled_rule_pack,
+    load_rule_pack,
+    select_applicable_rules,
+)
 
 
 def requirement(text: str) -> AtomicRequirement:
@@ -44,11 +48,67 @@ def test_bundled_rule_pack_matches_repository_rule_pack() -> None:
     assert bundled == repository
 
 
+def test_automotive_rule_pack_is_bundled_and_matches_repository_copy() -> None:
+    pack = load_bundled_rule_pack("automotive-ecu-v1")
+    bundled = Path(
+        "src/requirements_review_agent/resources/rules/automotive-ecu-v1.yaml"
+    ).read_text(encoding="utf-8")
+    repository = Path("rules/automotive-ecu-v1.yaml").read_text(encoding="utf-8")
+
+    assert bundled == repository
+    assert len(pack.rules) >= 10
+    assert {rule.rule_id for rule in pack.rules} >= {
+        "behavior.acceptance",
+        "preconditions.ecu_state",
+        "communication.can_lin",
+        "timing.timeout_retry",
+        "power.reset_wakeup",
+        "configuration.calibration",
+        "variants.hardware",
+        "diagnostics.fault_handling",
+        "automation.interface_data",
+        "automation.observability",
+    }
+
+
+def test_automotive_rule_pack_selects_ecu_specific_rules() -> None:
+    pack = load_bundled_rule_pack("automotive-ecu-v1")
+    rules = select_applicable_rules(
+        requirement(
+            "After ECU wake-up, the CAN signal shall be transmitted within 100 ms; "
+            "on timeout a DTC shall be stored."
+        ),
+        pack,
+    )
+
+    assert {rule.rule_id for rule in rules} >= {
+        "communication.can_lin",
+        "timing.timeout_retry",
+        "power.reset_wakeup",
+        "diagnostics.fault_handling",
+    }
+
+
 def test_case_insensitive_keyword_match() -> None:
     pack = load_rule_pack(Path("rules/home-iot-v1.yaml"))
     rules = select_applicable_rules(requirement("APP SUPPORTS WIFI RECOVERY"), pack)
     rule_ids = {rule.rule_id for rule in rules}
     assert "recovery.connection_loss" in rule_ids
+
+
+@pytest.mark.parametrize("text", ["available", "disabled", "writable"])
+def test_keyword_does_not_match_inside_another_word(text: str) -> None:
+    pack = load_rule_pack(Path("rules/home-iot-v1.yaml"))
+    rules = select_applicable_rules(requirement(text), pack)
+
+    assert "dependency.ble_wifi" not in {rule.rule_id for rule in rules}
+
+
+def test_app_keyword_does_not_match_applicable() -> None:
+    pack = load_rule_pack(Path("rules/home-iot-v1.yaml"))
+    rules = select_applicable_rules(requirement("This behavior is applicable."), pack)
+
+    assert "dependency.device_app_cloud" not in {rule.rule_id for rule in rules}
 
 
 def test_unmatched_excludes_non_always_rules() -> None:

@@ -246,7 +246,8 @@ def _doctor(workspace: Path) -> int:
     checks.append(("MCP", mcp_ok))
     checks.append(("Requirements inbox", _is_inbox_protected(workspace)))
     try:
-        load_bundled_rule_pack("home-iot-v1")
+        for rule_pack in ("home-iot-v1", "automotive-ecu-v1"):
+            load_bundled_rule_pack(rule_pack)
         rules_ok = True
     except ReviewException:
         rules_ok = False

@@ -192,23 +192,9 @@ def test_init_recovers_interrupted_managed_upgrade(
 
 def test_init_migrates_known_legacy_agent_without_state(tmp_path: Path) -> None:
     current = cli._resource_text("requirements-review.agent.md")
-    current_constraint = (
-        "- 第 1 步只要求 workspace-local PDF path。"
-        "Chat 已附加 PDF 时，直接使用 attachment metadata 中位于 "
-        "`requirements/` 下的路径，不重复询问。附件不在 `requirements/` 时，"
-        "要求用户先上传到该目录。rule pack 默认 `home-iot-v1`，"
-        "model mode 默认 `copilot`；除非用户主动指定，否则不询问并使用默认值。"
-        "model mode 只接受 copilot、company_api、local。"
+    legacy = Path("tests/fixtures/legacy-requirements-review.agent.md").read_text(
+        encoding="utf-8"
     )
-    legacy_constraint = (
-        "- 第 1 步必须要求用户提供 workspace-local PDF path、rule pack 与 model mode，"
-        "只接受 copilot、company_api、local。"
-    )
-    legacy = current.replace(
-        "1. 从 Chat attachment metadata 读取 `requirements/` 下的 PDF 路径；"
-        "没有附件时询问该目录内的 PDF 路径",
-        "1. 询问工作区内的 PDF 路径、rule pack 和模式",
-    ).replace(current_constraint, legacy_constraint)
     assert cli._sha256_text(legacy) == (
         "fdcd19fa755a1bed9abcbc3d8e76e6c2db6d960b9bf0f90ae62c4f8155266987"
     )

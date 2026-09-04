@@ -189,6 +189,11 @@ def load_bundled_rule_pack(name: str) -> RulePack:
         raise _invalid_rule_pack(Path(f"built-in:{filename}"), exc) from exc
 
 
+def _keyword_matches(text: str, keyword: str) -> bool:
+    pattern = rf"(?<!\w){re.escape(keyword.casefold())}(?!\w)"
+    return re.search(pattern, text) is not None
+
+
 def select_applicable_rules(
     requirement: AtomicRequirement,
     pack: RulePack,
@@ -198,7 +203,7 @@ def select_applicable_rules(
     seen_rule_ids: set[str] = set()
 
     for rule in pack.rules:
-        keyword_matches = any(keyword.casefold() in text for keyword in rule.keywords)
+        keyword_matches = any(_keyword_matches(text, keyword) for keyword in rule.keywords)
         if not rule.always and not keyword_matches:
             continue
 

@@ -1,0 +1,113 @@
+version: "1.0"
+rules:
+  - id: behavior.acceptance
+    question: "请确认需求明确描述触发条件、ECU 行为、可观测结果以及成功和失败判据。"
+    weight: 5
+    impact: both
+    scenario_category: behavior
+    always: true
+    keywords: []
+
+  - id: preconditions.ecu_state
+    question: "请确认 ECU 初始状态、运行模式、供电与通信前置条件已明确。"
+    weight: 5
+    impact: both
+    scenario_category: state
+    always: true
+    keywords: []
+
+  - id: boundaries.signal_values
+    question: "请确认信号或参数的范围、单位、精度、容差、边界值及越界行为可验证。"
+    weight: 4
+    impact: both
+    scenario_category: boundaries
+    always: false
+    keywords: ["range", "minimum", "maximum", "min", "max", "tolerance", "resolution", "hysteresis", "out of range"]
+
+  - id: state.mode_transition
+    question: "请确认状态或模式转换的来源状态、触发事件、目标状态及非法转换处理已定义。"
+    weight: 5
+    impact: both
+    scenario_category: state
+    always: false
+    keywords: ["state", "mode", "transition", "initialization", "initialize", "shutdown", "degraded mode"]
+
+  - id: communication.can_lin
+    question: "请确认 CAN/LIN 通信的报文、信号、周期、有效性及通信丢失行为已定义。"
+    weight: 5
+    impact: both
+    scenario_category: communication
+    always: false
+    keywords: ["CAN", "LIN", "bus", "frame", "message", "signal", "PDU", "ECU2ECU", "E2E"]
+
+  - id: timing.timeout_retry
+    question: "请确认时序、超时、重试、去抖和恢复次数具有明确数值与起止条件。"
+    weight: 5
+    impact: both
+    scenario_category: timing
+    always: false
+    keywords: ["timeout", "retry", "debounce", "cycle time", "response time", "deadline", "timing", " ms"]
+
+  - id: power.reset_wakeup
+    question: "请确认上电、掉电、复位、休眠和唤醒场景中的状态保持与恢复行为已定义。"
+    weight: 5
+    impact: both
+    scenario_category: power
+    always: false
+    keywords: ["power supply", "power-on", "power-off", "reset", "wake-up", "wakeup", "sleep", "ignition", "KL15", "undervoltage", "overvoltage"]
+
+  - id: configuration.calibration
+    question: "请确认配置或标定参数的默认值、有效范围、持久化、更新时机及错误处理已定义。"
+    weight: 4
+    impact: both
+    scenario_category: configuration
+    always: false
+    keywords: ["configuration", "calibration", "coding", "parameter", "NVM", "EEPROM", "default value", "writable"]
+
+  - id: variants.hardware
+    question: "请确认硬件或车型变体、引脚和通道差异及不支持组合的行为已说明。"
+    weight: 4
+    impact: both
+    scenario_category: variants
+    always: false
+    keywords: ["variant", "hardware version", "HW version", "pin", "channel", "sensor", "actuator"]
+
+  - id: diagnostics.fault_handling
+    question: "请确认故障检测条件、DTC、降级或安全状态、恢复条件与故障优先级已定义。"
+    weight: 5
+    impact: both
+    scenario_category: diagnostics
+    always: false
+    keywords: ["DTC", "diagnostic", "fault", "failure", "error", "fallback", "fail-safe", "safe state", "limp-home"]
+
+  - id: safety.watchdog
+    question: "请确认安全目标、看门狗及监控机制对应的故障响应和时间约束可验证。"
+    weight: 5
+    impact: both
+    scenario_category: safety
+    always: false
+    keywords: ["safety", "ASIL", "watchdog", "supervision", "alive counter", "CRC"]
+
+  - id: performance.resource_limits
+    question: "请确认启动时间、延迟、CPU、内存或吞吐量目标具有可测量上限及测试条件。"
+    weight: 4
+    impact: both
+    scenario_category: performance
+    always: false
+    keywords: ["startup time", "latency", "CPU", "memory", "throughput", "performance"]
+
+  - id: automation.interface_data
+    question: "请确认接口方向、数据类型、单位、缩放、枚举、无效值和更新契约支持自动化验证。"
+    weight: 4
+    impact: automation
+    scenario_category: interface
+    always: false
+    keywords: ["interface", "input signal", "output signal", "data type", "unit", "scaling", "enumeration", "invalid value", "RTE", "AUTOSAR"]
+
+  - id: automation.observability
+    question: "请确认日志、跟踪、测量点或诊断读数足以自动判断结果并定位失败。"
+    weight: 4
+    impact: automation
+    scenario_category: observability
+    always: false
+    keywords: ["logging", "log entry", "trace", "measurement", "monitor", "debug", "telemetry", "diagnostic readout"]
