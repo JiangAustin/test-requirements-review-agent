@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal
 
-from .models import AtomicRequirement, ExtractedDocument, SourceRef
+from .models import AtomicRequirement, ExtractedDocument, ExtractedPage, SourceRef
 
 FilterReason = Literal[
     "document_metadata",
@@ -18,7 +18,9 @@ FilterReason = Literal[
 
 _PAGE_NUMBER_RE = re.compile(r"^(?:page\s+)?\d+(?:\s*(?:of|/)\s*\d+)?$", re.IGNORECASE)
 _COMBINED_PAGE_NUMBER_RE = re.compile(r"^page\s+\d+\s+of\s+\d+\S.*$", re.IGNORECASE)
-_TOC_ENTRY_RE = re.compile(r"^.+?\s*\.{2,}\s*\d+\s*$")
+_TOC_ENTRY_RE = re.compile(
+    r"^\d+(?:\.\d+)*\.?\s+.+?(?:\s*\.){3,}\s*\d+\s*$"
+)
 _TOC_TITLE_RE = re.compile(r"^(?:table\s+of\s+contents?|contents?)$", re.IGNORECASE)
 _DOCUMENT_METADATA_RE = re.compile(
     r"^(?:(?:document\s+(?:id|number|no\.?|title)|revision|version|status|"
@@ -38,12 +40,11 @@ _DOCUMENT_HISTORY_RE = re.compile(
     r"^(?:approved\s+versions|revision\s+history|approval\s+history|"
     r"the\s+current\s+revision\s+\S+\s+has\s+been\s+approved|"
     r"initial\s+creation.*\brevision\b.*\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|"
-    r"version\s+version\s+comment\s+polarion\s+revision\s+approval\s+date|"
+    r"version\s*version\s*comment\s*polarion\s*revision\s*approval\s*date|"
     r".{2,80}\([^)]*\)\s*signed\s*\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
     r"(?:\s+\d{1,2}:\d{2})?)$",
     re.IGNORECASE,
 )
-_RESIDUAL_TOC_ENTRY_RE = re.compile(r"^\d+(?:\.\d+)*\s+\S.+\s+\d+$")
 _RESIDUAL_PAGE_NUMBER_RE = re.compile(r"^page\s+\d+\s+of\s+\d+", re.IGNORECASE)
 _RESIDUAL_METADATA_TERMS = frozenset(
     {"approval", "approved", "comment", "date", "polarion", "revision", "signed", "version"}
@@ -64,6 +65,12 @@ _METADATA_TABLE_HEADERS = frozenset(
         "version",
     }
 )
+_METADATA_PAGE_MARKER_RE = re.compile(
+    r"(?:approved\s+versions:?|document\s+signatures|"
+    r"the\s+current\s+revision\s+\S+\s+has\s+been\s+approved|"
+    r"version\s*version\s*comment\s*polarion\s*revision\s*approval\s*date)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -83,8 +90,11 @@ class ResidualNoiseResult:
         return sum(self.reason_counts.values())
 
 
-def _stable_id(source: SourceRef, normalized_text: str) -> str:
-    identity = f"{source.page}|{source.section or ''}|{source.table_index}|{normalized_text}"
+def _stable_id(source: SourceRef, normalized_text: str, position: str) -> str:
+    identity = (
+        f"{source.page}|{source.section or ''}|{source.table_index}|"
+        f"{source.bbox}|{position}|{normalized_text}"
+    )
     return f"REQ-{sha256(identity.encode('utf-8')).hexdigest()[:12]}"
 
 
@@ -149,6 +159,7 @@ def _block_filter_reason(
     repeated_margin_keys: set[tuple[str, str]],
     page_height: float | None,
     toc_page: bool,
+    metadata_page: bool,
 ) -> FilterReason | None:
     text = " ".join(block.quote.split())
     modal = _REQUIREMENT_MODAL_RE.search(text)
@@ -162,6 +173,8 @@ def _block_filter_reason(
     if (_TOC_TITLE_RE.fullmatch(text) or _TOC_ENTRY_RE.fullmatch(text)) and not modal:
         return "table_of_contents"
     if (_DOCUMENT_METADATA_RE.match(text) or _DOCUMENT_HISTORY_RE.fullmatch(text)) and not modal:
+        return "document_metadata"
+    if metadata_page and not modal:
         return "document_metadata"
     if any(_overlap_ratio(block.bbox, table_bbox) >= 0.8 for table_bbox in table_bboxes):
         return "table_overlap"
@@ -195,13 +208,56 @@ def _is_metadata_table(table_cells: tuple[tuple[str | None, ...], ...], header_r
     return revision_history or approval_history
 
 
+def _normalized_lines(text: str) -> tuple[str, ...]:
+    return tuple(" ".join(line.split()) for line in text.splitlines() if line.strip())
+
+
+def _table_row_is_toc_entry(row: tuple[str | None, ...]) -> bool:
+    cells = [" ".join(cell.split()) for cell in row if cell is not None and cell.strip()]
+    return len(cells) >= 2 and bool(_TOC_ENTRY_RE.fullmatch(" ".join(cells)))
+
+
+def _toc_entry_count(page: ExtractedPage) -> int:
+    block_entries = sum(
+        bool(_TOC_ENTRY_RE.fullmatch(line))
+        for block in page.blocks
+        for line in _normalized_lines(block.quote)
+    )
+    table_entries = sum(
+        _table_row_is_toc_entry(row)
+        for table in page.tables
+        for row in table.cells[table.header_rows :]
+    )
+    return block_entries + table_entries
+
+
+def _has_toc_title(page: ExtractedPage) -> bool:
+    return any(
+        _TOC_TITLE_RE.fullmatch(line)
+        for block in page.blocks
+        for line in _normalized_lines(block.quote)
+    )
+
+
+def _metadata_marker_count(page: ExtractedPage) -> int:
+    texts = [block.quote for block in page.blocks]
+    texts.extend(
+        cell
+        for table in page.tables
+        for row in table.cells
+        for cell in row
+        if cell is not None
+    )
+    return len(_METADATA_PAGE_MARKER_RE.findall("\n".join(texts)))
+
+
 def _residual_noise_reason(text: str) -> FilterReason | None:
     normalized = " ".join(text.split())
     if _REQUIREMENT_MODAL_RE.search(normalized):
         return None
     if _RESIDUAL_PAGE_NUMBER_RE.match(normalized):
         return "page_number"
-    if _RESIDUAL_TOC_ENTRY_RE.fullmatch(normalized):
+    if any(_TOC_ENTRY_RE.fullmatch(line) for line in _normalized_lines(text)):
         return "table_of_contents"
     terms = set(re.findall(r"[a-z]+", normalized.casefold()))
     if len(terms & _RESIDUAL_METADATA_TERMS) >= 3:
@@ -238,7 +294,12 @@ def normalize_requirements_with_diagnostics(
     toc_pages = {
         page.page
         for page in document.pages
-        if any(_TOC_TITLE_RE.fullmatch(" ".join(block.quote.split())) for block in page.blocks)
+        if _has_toc_title(page) or _toc_entry_count(page) >= 3
+    }
+    metadata_pages = {
+        page.page
+        for page in document.pages
+        if _metadata_marker_count(page) >= 2
     }
 
     for page in document.pages:
@@ -252,9 +313,22 @@ def normalize_requirements_with_diagnostics(
                 # join non-None with ' | '
                 parts = [c for c in row if c is not None]
                 text = " | ".join(parts)
-                if page.page in toc_pages and not _REQUIREMENT_MODAL_RE.search(text):
-                    filtered_counts["table_of_contents"] += 1
-                    continue
+                page_filter_reason: FilterReason | None = None
+                if page.page in toc_pages:
+                    page_filter_reason = "table_of_contents"
+                elif page.page in metadata_pages:
+                    page_filter_reason = "document_metadata"
+                trimmed_for_page_noise = False
+                if page_filter_reason is not None:
+                    modal_parts = [part for part in parts if _REQUIREMENT_MODAL_RE.search(part)]
+                    if not modal_parts:
+                        filtered_counts[page_filter_reason] += 1
+                        continue
+                    if len(modal_parts) != len(parts):
+                        filtered_counts[page_filter_reason] += len(parts) - len(modal_parts)
+                        parts = modal_parts
+                        text = " | ".join(parts)
+                        trimmed_for_page_noise = True
                 if metadata_table and not _REQUIREMENT_MODAL_RE.search(text):
                     filtered_counts["document_metadata"] += 1
                     continue
@@ -272,8 +346,12 @@ def normalize_requirements_with_diagnostics(
                     table_index=table.table_index,
                     bbox=bbox4,
                 )
-                rid = _stable_id(src, text)
-                needs_manual = table.needs_manual_review or any(c is None for c in row)
+                rid = _stable_id(src, text, f"table-row:{_r_idx}")
+                needs_manual = (
+                    table.needs_manual_review
+                    or any(c is None for c in row)
+                    or trimmed_for_page_noise
+                )
                 results.append(
                     AtomicRequirement(
                         requirement_id=rid,
@@ -286,16 +364,32 @@ def normalize_requirements_with_diagnostics(
         # then paragraphs / blocks
         last_heading: str | None = None
         table_bboxes = tuple(table.bbox for table in page.tables)
-        for block in page.blocks:
+        for block_index, block in enumerate(page.blocks):
             txt = block.quote.strip()
             if not txt:
                 continue
+            trimmed_for_page_noise = False
+            page_filter_reason = None
+            if page.page in toc_pages:
+                page_filter_reason = "table_of_contents"
+            elif page.page in metadata_pages:
+                page_filter_reason = "document_metadata"
+            if page_filter_reason is not None:
+                page_lines = _normalized_lines(txt)
+                modal_lines = [
+                    line for line in page_lines if _REQUIREMENT_MODAL_RE.search(line)
+                ]
+                if modal_lines and len(modal_lines) != len(page_lines):
+                    filtered_counts[page_filter_reason] += len(page_lines) - len(modal_lines)
+                    txt = "\n".join(modal_lines)
+                    trimmed_for_page_noise = True
             filter_reason = _block_filter_reason(
                 block,
                 table_bboxes,
                 repeated_margin_keys,
                 page.height,
                 page.page in toc_pages,
+                page.page in metadata_pages,
             )
             if filter_reason is not None:
                 filtered_counts[filter_reason] += 1
@@ -351,9 +445,9 @@ def normalize_requirements_with_diagnostics(
                     items.append(line)
             else:
                 # keep whole block intact (no deterministic delimiter)
-                items = [txt]
+                items = [" ".join(txt.split())]
 
-            for item in items:
+            for item_index, item in enumerate(items):
                 # ambiguous if multiple sentences (support English + Chinese punctuation)
                 sentences = re.split(r"[\.\?!。！？]+", item.strip())
                 sentences = [s for s in sentences if s.strip()]
@@ -366,13 +460,17 @@ def normalize_requirements_with_diagnostics(
                     table_index=None,
                     bbox=block.bbox,
                 )
-                rid = _stable_id(src, item)
+                rid = _stable_id(
+                    src,
+                    item,
+                    f"block:{block_index}:item:{item_index}",
+                )
                 results.append(
                     AtomicRequirement(
                         requirement_id=rid,
                         text=item,
                         sources=(src,),
-                        needs_manual_review=multi_sent,
+                        needs_manual_review=multi_sent or trimmed_for_page_noise,
                     )
                 )
 

@@ -45,6 +45,35 @@ def test_normalizer_splits_numbered_items_and_has_stable_ids() -> None:
     assert first[0].sources[0].page == 1
 
 
+def test_duplicate_text_blocks_and_table_rows_receive_unique_stable_ids() -> None:
+    table = ExtractedTable(
+        page=1,
+        table_index=0,
+        bbox=(40, 240, 500, 320),
+        cells=(("Value",), ("Repeated",), ("Repeated",)),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Repeated requirement text.", (40, 100, 300, 120)),
+            block(1, "Repeated requirement text.", (40, 100, 300, 120)),
+        ),
+        tables=(table,),
+    )
+    document = ExtractedDocument(sha256="deadbeef", pages=(page,))
+
+    first = normalize_requirements(document)
+    second = normalize_requirements(document)
+
+    assert len({item.requirement_id for item in first}) == 4
+    assert [item.requirement_id for item in first] == [
+        item.requirement_id for item in second
+    ]
+
+
 def test_bullets_and_multi_digit_numbering_and_no_unnecessary_split() -> None:
     # bullets and multi-digit numbers should split
     doc = extracted_document_with("- alpha\n* beta\n10) ten\n11. eleven")
@@ -123,7 +152,7 @@ def test_residual_noise_diagnostics_sample_first_fifty_and_limit_examples() -> N
         atomic_requirement(
             index,
             (
-                f"{index + 1} Architecture overview {index + 4}"
+                    f"{index + 1} Architecture overview . . . .{index + 4}"
                 if index < 3
                 else f"Page {index + 1} of 94 footer"
                 if index < 6
@@ -231,9 +260,198 @@ def test_filters_non_modal_table_rows_on_toc_page() -> None:
     )
 
     assert [item.text for item in result.requirements] == [
-        "Device shall expose a content index. | 8"
+        "Device shall expose a content index."
     ]
-    assert result.filtered_counts == {"table_of_contents": 2}
+    assert result.filtered_counts == {"table_of_contents": 3}
+
+
+def test_detects_toc_continuation_page_from_spaced_dot_leaders() -> None:
+    page = ExtractedPage(
+        page=3,
+        text="",
+        blocks=(
+            block(3, "4.2.5 Draw switch . . . . . . .52", (40, 100, 520, 120)),
+            block(3, "4.2.6 Relay . . . . . . . . .54", (40, 140, 520, 160)),
+            block(3, "5 Non-Functional Requirements . . . .84", (40, 180, 520, 200)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"table_of_contents": 3}
+
+
+def test_detects_toc_title_and_entries_combined_in_one_multiline_block() -> None:
+    text = (
+        "Table of Content\n"
+        "1 Introduction . . . .4\n"
+        "2 System Context . . . .5"
+    )
+    page = ExtractedPage(
+        page=2,
+        text=text,
+        blocks=(block(2, text, (40, 90, 520, 180)),),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"table_of_contents": 1}
+
+
+def test_dotted_prose_without_section_numbers_does_not_mark_toc_page() -> None:
+    texts = tuple(
+        f"Retry operation after transient communication error {index} . . . . 3"
+        for index in range(3)
+    )
+    page = ExtractedPage(
+        page=20,
+        text="\n".join(texts),
+        blocks=tuple(
+            block(20, text, (40, 100 + index * 40, 520, 120 + index * 40))
+            for index, text in enumerate(texts)
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == list(texts)
+    assert result.filtered_counts == {}
+
+
+def test_numbered_parameter_table_does_not_mark_toc_page() -> None:
+    table = ExtractedTable(
+        page=20,
+        table_index=0,
+        bbox=(40, 100, 500, 260),
+        cells=(
+            ("Parameter", "Value"),
+            ("1. Timeout", "30"),
+            ("2. Retries", "3"),
+            ("3. Channels", "4"),
+        ),
+        needs_manual_review=False,
+        header_rows=1,
+    )
+    page = ExtractedPage(page=20, text="", blocks=(), tables=(table,), height=842)
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "1. Timeout | 30",
+        "2. Retries | 3",
+        "3. Channels | 4",
+    ]
+    assert result.filtered_counts == {}
+
+
+def test_filters_approval_metadata_page_with_concatenated_pdf_text() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Ventilation PUMU Software Specification", (40, 90, 500, 110)),
+            block(1, "Approved Versions", (40, 190, 300, 210)),
+            block(1, "The current Revision 5209718 has been approved", (40, 220, 500, 240)),
+            block(1, "VersionVersion CommentPolarion RevisionApproval Date", (40, 270, 520, 290)),
+            block(1, "1.2Initial creation50992362026-07-24 03:22", (40, 300, 520, 320)),
+            block(1, "Document Signatures", (40, 350, 300, 370)),
+            block(1, "Cioflica Paul (BSH GDE-SVVS)Signed2026-09-02 15:53", (40, 390, 520, 410)),
+            block(1, "Revision must remain visible in diagnostics.", (40, 450, 500, 470)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "Revision must remain visible in diagnostics."
+    ]
+    assert result.filtered_counts == {"document_metadata": 7}
+
+
+def test_detects_metadata_markers_combined_in_one_multiline_block() -> None:
+    text = "Approved Versions\nDocument Signatures\n1.2Initial creation50992362026-07-24"
+    page = ExtractedPage(
+        page=1,
+        text=text,
+        blocks=(block(1, text, (40, 190, 520, 320)),),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"document_metadata": 1}
+
+
+def test_detects_metadata_markers_split_across_adjacent_blocks() -> None:
+    page = ExtractedPage(
+        page=1,
+        text="",
+        blocks=(
+            block(1, "Approved", (40, 190, 150, 210)),
+            block(1, "Versions", (160, 190, 260, 210)),
+            block(1, "Document", (40, 230, 150, 250)),
+            block(1, "Signatures", (160, 230, 280, 250)),
+            block(1, "1.2Initial creation50992362026-07-24", (40, 270, 520, 290)),
+        ),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert result.requirements == ()
+    assert result.filtered_counts == {"document_metadata": 5}
+
+
+def test_mixed_metadata_block_keeps_only_modal_line_for_manual_review() -> None:
+    text = (
+        "Approved Versions\n"
+        "Document Signatures\n"
+        "The controller shall expose the approved revision."
+    )
+    page = ExtractedPage(
+        page=1,
+        text=text,
+        blocks=(block(1, text, (40, 190, 520, 320)),),
+        tables=(),
+        height=842,
+    )
+
+    result = normalize_requirements_with_diagnostics(
+        ExtractedDocument(sha256="deadbeef", pages=(page,))
+    )
+
+    assert [item.text for item in result.requirements] == [
+        "The controller shall expose the approved revision."
+    ]
+    assert result.requirements[0].needs_manual_review is True
+    assert result.filtered_counts == {"document_metadata": 2}
 
 
 def test_filters_combined_page_footer_only_in_margin() -> None:

@@ -37,6 +37,27 @@ def test_extracts_text_table_and_one_based_sources(tmp_path: Path) -> None:
     assert len(result.sha256) == 64
 
 
+def test_preserves_line_boundaries_within_a_pdf_text_block(tmp_path: Path) -> None:
+    import fitz as _fitz
+
+    path = tmp_path / "multiline.pdf"
+    document = _fitz.open()
+    page = document.new_page()
+    page.insert_textbox(
+        _fitz.Rect(50, 80, 500, 180),
+        "Table of Content\n1 Introduction . . . .4\n2 System Context . . . .5",
+        fontsize=10,
+    )
+    document.save(path)
+    document.close()
+
+    result = extract_pdf(path, tmp_path)
+
+    assert result.pages[0].blocks[0].quote == (
+        "Table of Content\n1 Introduction . . . .4\n2 System Context . . . .5"
+    )
+
+
 def test_real_multi_page_pdf_filters_document_noise(tmp_path: Path) -> None:
     import fitz as _fitz
 

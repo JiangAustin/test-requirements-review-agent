@@ -50,14 +50,17 @@ def extract_pdf(path: Path, workspace: Path) -> ExtractedDocument:
                 texts = []
                 for block in pdict.get("blocks", []):
                     if block.get("type") == 0:
-                        spans = []
+                        lines = []
                         for line in block.get("lines", []):
+                            spans = []
                             for span in line.get("spans", []):
                                 txt = span.get("text", "")
                                 if txt and txt.strip():
                                     spans.append(txt)
-                        if spans:
-                            text = "".join(spans)
+                            if spans:
+                                lines.append("".join(spans))
+                        if lines:
+                            text = "\n".join(lines)
                             texts.append(text)
                             bbox = tuple(block.get("bbox", [0, 0, 0, 0]))
                             blocks.append(

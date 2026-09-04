@@ -56,8 +56,8 @@ def build_pdf_with_residual_noise(path: Path, requirement_count: int = 5) -> Pat
     document = fitz.open()
     page = document.new_page()
     page.insert_text(
-        (50, 60),
-        "1 Introduction and system architecture overview details 4",
+        (50, 400),
+        "Page 1 of 94 Software System Documentation",
         fontsize=10,
     )
     for index in range(requirement_count):
@@ -110,7 +110,7 @@ def test_prepare_rejects_residual_document_noise_above_ten_percent(tmp_path: Pat
     assert exc_info.value.error.details["reason"] == "residual_document_noise"
     assert exc_info.value.error.details["sample_size"] == 6
     assert exc_info.value.error.details["suspected_count"] == 1
-    assert exc_info.value.error.details["reason_counts"] == {"table_of_contents": 1}
+    assert exc_info.value.error.details["reason_counts"] == {"page_number": 1}
     example_ids = exc_info.value.error.details["example_requirement_ids"]
     assert isinstance(example_ids, list)
     assert len(example_ids) == 1
